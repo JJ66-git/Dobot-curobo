@@ -1,0 +1,396 @@
+<?xml version="1.0" ?>
+<!--
+  Dobot X-Trainer 双臂机器人 URDF 文件
+  =====================================
+  用途：供 cuRobo 运动规划库使用（IK求解、避障轨迹规划等）
+  结构：双臂各 6 自由度 + 夹爪（夹爪在 cuRobo 中锁定，不参与规划）
+  关节命名：J1_1~J1_6（左臂）、J2_1~J2_6（右臂）
+           J1_7/J1_8（左夹爪）、J2_7/J2_8（右夹爪）
+
+  连杆长度参考：Dobot X-Trainer 实物比例估算（桌面级双臂机器人）
+  每臂有效工作距离约 320mm
+
+  参考结构：curobo/content/assets/robot/ur_description/dual_ur10e.urdf
+-->
+<robot name="xtrainer_dual_arm">
+
+  <!-- ============================================================
+       第一部分：世界基座和机器人中心基座
+       ============================================================ -->
+
+  <!-- world_base_link：世界坐标系原点，所有运动的参考基准 -->
+  <link name="world_base_link">
+    <inertial>
+      <mass value="2.0"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- base_link：机器人中心基座，左右臂的公共参考点 -->
+  <link name="base_link">
+    <inertial>
+      <mass value="3.0"/>
+      <origin rpy="0 0 0" xyz="0 0 0.03"/>
+      <!-- 圆柱体近似：半径0.08m，高0.06m -->
+      <inertia ixx="0.003" ixy="0.0" ixz="0.0" iyy="0.003" iyz="0.0" izz="0.005"/>
+    </inertial>
+  </link>
+
+  <!-- 固定关节：world_base_link → base_link（机器人固定在世界原点） -->
+  <joint name="world_to_base" type="fixed">
+    <parent link="world_base_link"/>
+    <child link="base_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+  </joint>
+
+  <!-- ============================================================
+       第二部分：左臂（Arm 1）— 6自由度 + 夹爪
+       关节名：J1_1 ~ J1_6（规划用），J1_7/J1_8（夹爪，锁定）
+       ============================================================ -->
+
+  <!-- 左臂基座偏移：向左偏移 0.075m -->
+  <link name="left_arm_base">
+    <inertial>
+      <mass value="0.8"/>
+      <origin rpy="0 0 0" xyz="0 0 0.03"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_left_arm" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_arm_base"/>
+    <origin rpy="0 0 0" xyz="-0.075 0 0.06"/>
+  </joint>
+
+  <!-- J1_1：左肩旋转（绕Z轴，肩部左右旋转） -->
+  <link name="J1_1_link">
+    <inertial>
+      <mass value="0.5"/>
+      <origin rpy="0 0 0" xyz="0 0 0.025"/>
+      <!-- 小圆柱体：半径0.03m，高0.05m -->
+      <inertia ixx="0.0003" ixy="0.0" ixz="0.0" iyy="0.0003" iyz="0.0" izz="0.0002"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_1" type="revolute">
+    <parent link="left_arm_base"/>
+    <child link="J1_1_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="50.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J1_2：左肩抬升（绕Y轴，大臂前后摆动） -->
+  <link name="J1_2_link">
+    <inertial>
+      <mass value="0.6"/>
+      <origin rpy="0 0 0" xyz="0 0 0.055"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_2" type="revolute">
+    <parent link="J1_1_link"/>
+    <child link="J1_2_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.05"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="50.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J1_3：左肘弯曲（绕Y轴，小臂上下摆动） -->
+  <link name="J1_3_link">
+    <inertial>
+      <mass value="0.5"/>
+      <origin rpy="0 0 0" xyz="0 0 0.05"/>
+      <inertia ixx="0.0008" ixy="0.0" ixz="0.0" iyy="0.0008" iyz="0.0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_3" type="revolute">
+    <parent link="J1_2_link"/>
+    <child link="J1_3_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.11"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="30.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J1_4：左腕弯曲（绕Y轴，腕部上下摆动） -->
+  <link name="J1_4_link">
+    <inertial>
+      <mass value="0.3"/>
+      <origin rpy="0 0 0" xyz="0 0 0.025"/>
+      <inertia ixx="0.0002" ixy="0.0" ixz="0.0" iyy="0.0002" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_4" type="revolute">
+    <parent link="J1_3_link"/>
+    <child link="J1_4_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.10"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="20.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J1_5：左腕旋转（绕X轴，腕部自转） -->
+  <link name="J1_5_link">
+    <inertial>
+      <mass value="0.2"/>
+      <origin rpy="0 0 0" xyz="0 0 0.02"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_5" type="revolute">
+    <parent link="J1_4_link"/>
+    <child link="J1_5_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.04"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="15.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.05" friction="0.02"/>
+  </joint>
+
+  <!-- J1_6：左腕末端旋转（绕Z轴，末端工具自转） -->
+  <link name="J1_6_link">
+    <inertial>
+      <mass value="0.15"/>
+      <origin rpy="0 0 0" xyz="0 0 0.015"/>
+      <inertia ixx="0.00005" ixy="0.0" ixz="0.0" iyy="0.00005" iyz="0.0" izz="0.00003"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_6" type="revolute">
+    <parent link="J1_5_link"/>
+    <child link="J1_6_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.035"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.05" friction="0.02"/>
+  </joint>
+
+  <!-- 左夹爪（J1_7, J1_8）：cuRobo 规划时锁定为 fixed，不参与 IK 求解 -->
+  <link name="J1_7_link">
+    <inertial>
+      <mass value="0.1"/>
+      <origin rpy="0 0 0" xyz="0 -0.015 0.02"/>
+      <inertia ixx="0.00002" ixy="0.0" ixz="0.0" iyy="0.00002" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_7" type="fixed">
+    <parent link="J1_6_link"/>
+    <child link="J1_7_link"/>
+    <origin rpy="0 0 0" xyz="0 -0.01 0.015"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="J1_8_link">
+    <inertial>
+      <mass value="0.1"/>
+      <origin rpy="0 0 0" xyz="0 0.015 0.02"/>
+      <inertia ixx="0.00002" ixy="0.0" ixz="0.0" iyy="0.00002" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_8" type="fixed">
+    <parent link="J1_6_link"/>
+    <child link="J1_8_link"/>
+    <origin rpy="0 0 0" xyz="0 0.01 0.015"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- 左臂末端执行器（cuRobo IK 的目标帧） -->
+  <link name="left_ee_link">
+    <inertial>
+      <mass value="0.05"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="0.00001" ixy="0.0" ixz="0.0" iyy="0.00001" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J1_6_to_ee" type="fixed">
+    <parent link="J1_6_link"/>
+    <child link="left_ee_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.04"/>
+  </joint>
+
+  <!-- ============================================================
+       第三部分：右臂（Arm 2）— 6自由度 + 夹爪
+       结构与左臂对称，关节名 J2_1 ~ J2_6
+       ============================================================ -->
+
+  <!-- 右臂基座偏移：向右偏移 0.075m -->
+  <link name="right_arm_base">
+    <inertial>
+      <mass value="0.8"/>
+      <origin rpy="0 0 0" xyz="0 0 0.03"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_right_arm" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_arm_base"/>
+    <origin rpy="0 0 0" xyz="0.075 0 0.06"/>
+  </joint>
+
+  <!-- J2_1：右肩旋转 -->
+  <link name="J2_1_link">
+    <inertial>
+      <mass value="0.5"/>
+      <origin rpy="0 0 0" xyz="0 0 0.025"/>
+      <inertia ixx="0.0003" ixy="0.0" ixz="0.0" iyy="0.0003" iyz="0.0" izz="0.0002"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_1" type="revolute">
+    <parent link="right_arm_base"/>
+    <child link="J2_1_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="50.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J2_2：右肩抬升 -->
+  <link name="J2_2_link">
+    <inertial>
+      <mass value="0.6"/>
+      <origin rpy="0 0 0" xyz="0 0 0.055"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_2" type="revolute">
+    <parent link="J2_1_link"/>
+    <child link="J2_2_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.05"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="50.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J2_3：右肘弯曲 -->
+  <link name="J2_3_link">
+    <inertial>
+      <mass value="0.5"/>
+      <origin rpy="0 0 0" xyz="0 0 0.05"/>
+      <inertia ixx="0.0008" ixy="0.0" ixz="0.0" iyy="0.0008" iyz="0.0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_3" type="revolute">
+    <parent link="J2_2_link"/>
+    <child link="J2_3_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.11"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="30.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J2_4：右腕弯曲 -->
+  <link name="J2_4_link">
+    <inertial>
+      <mass value="0.3"/>
+      <origin rpy="0 0 0" xyz="0 0 0.025"/>
+      <inertia ixx="0.0002" ixy="0.0" ixz="0.0" iyy="0.0002" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_4" type="revolute">
+    <parent link="J2_3_link"/>
+    <child link="J2_4_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.10"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="20.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.1" friction="0.05"/>
+  </joint>
+
+  <!-- J2_5：右腕旋转 -->
+  <link name="J2_5_link">
+    <inertial>
+      <mass value="0.2"/>
+      <origin rpy="0 0 0" xyz="0 0 0.02"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_5" type="revolute">
+    <parent link="J2_4_link"/>
+    <child link="J2_5_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.04"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="15.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.05" friction="0.02"/>
+  </joint>
+
+  <!-- J2_6：右腕末端旋转 -->
+  <link name="J2_6_link">
+    <inertial>
+      <mass value="0.15"/>
+      <origin rpy="0 0 0" xyz="0 0 0.015"/>
+      <inertia ixx="0.00005" ixy="0.0" ixz="0.0" iyy="0.00005" iyz="0.0" izz="0.00003"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_6" type="revolute">
+    <parent link="J2_5_link"/>
+    <child link="J2_6_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.035"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10.0" lower="-3.14159" upper="3.14159" velocity="3.14"/>
+    <dynamics damping="0.05" friction="0.02"/>
+  </joint>
+
+  <!-- 右夹爪（J2_7, J2_8）：cuRobo 规划时锁定为 fixed -->
+  <link name="J2_7_link">
+    <inertial>
+      <mass value="0.1"/>
+      <origin rpy="0 0 0" xyz="0 -0.015 0.02"/>
+      <inertia ixx="0.00002" ixy="0.0" ixz="0.0" iyy="0.00002" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_7" type="fixed">
+    <parent link="J2_6_link"/>
+    <child link="J2_7_link"/>
+    <origin rpy="0 0 0" xyz="0 -0.01 0.015"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="J2_8_link">
+    <inertial>
+      <mass value="0.1"/>
+      <origin rpy="0 0 0" xyz="0 0.015 0.02"/>
+      <inertia ixx="0.00002" ixy="0.0" ixz="0.0" iyy="0.00002" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_8" type="fixed">
+    <parent link="J2_6_link"/>
+    <child link="J2_8_link"/>
+    <origin rpy="0 0 0" xyz="0 0.01 0.015"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- 右臂末端执行器（cuRobo IK 的目标帧） -->
+  <link name="right_ee_link">
+    <inertial>
+      <mass value="0.05"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="0.00001" ixy="0.0" ixz="0.0" iyy="0.00001" iyz="0.0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="J2_6_to_ee" type="fixed">
+    <parent link="J2_6_link"/>
+    <child link="right_ee_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0.04"/>
+  </joint>
+
+</robot>

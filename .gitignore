@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# cuRobo 第三方库（不提交，只保留自定义配置）
+curobo/*
+!curobo/my_x_trainer/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
