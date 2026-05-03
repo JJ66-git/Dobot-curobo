@@ -1,297 +1,302 @@
 # Dobot X-Trainer 运动规划模块 — 工作站部署与调试指南
 
-> 本文档指导你将 Windows 上开发的运动规划模块迁移到 Linux GPU 工作站，
-> 完成环境配置、单元测试、集成调试的全流程。
+> 本文档指导你将 GitHub 上的新文件安全合并到工作站现有的 X-Trainer 项目中，
+> 然后完成环境配置、测试、调试的全流程。
+> **核心原则：不破坏现有项目结构，只新增/更新需要的文件。**
 
 ---
 
 ## 目录
 
-1. [环境要求](#1-环境要求)
-2. [克隆项目到工作站](#2-克隆项目到工作站)
-3. [安装 Python 依赖](#3-安装-python-依赖)
-4. [配置 cuRobo](#4-配置-curobo)
-5. [验证 URDF 模型](#5-验证-urdf-模型)
-6. [运行运动规划模块测试](#6-运行运动规划模块测试)
-7. [与 Isaac Sim 集成](#7-与-isaac-sim-集成)
-8. [常见问题排查](#8-常见问题排查)
-9. [调试技巧](#9-调试技巧)
+1. [工作站现有项目结构](#1-工作站现有项目结构)
+2. [备份现有项目](#2-备份现有项目)
+3. [拉取 GitHub 上的新文件](#3-拉取-github-上的新文件)
+4. [检查文件是否到位](#4-检查文件是否到位)
+5. [安装 Python 依赖](#5-安装-python-依赖)
+6. [配置 cuRobo 识别新机器人](#6-配置-curobo-识别新机器人)
+7. [运行运动规划模块测试](#7-运行运动规划模块测试)
+8. [与 Isaac Sim / policy_server 集成](#8-与-isaac-sim--policy_server-集成)
+9. [常见问题排查](#9-常见问题排查)
+10. [调试技巧](#10-调试技巧)
 
 ---
 
-## 1. 环境要求
+## 1. 工作站现有项目结构
 
-### 硬件
+你的工作站上已经有一个完整的 X-Trainer 项目，结构大致如下：
 
-| 项目 | 最低要求 | 推荐配置 |
-|------|---------|---------|
-| GPU | NVIDIA RTX 2060 (6GB) | RTX 3080+ (10GB+) |
-| 内存 | 16 GB | 32 GB |
-| 磁盘 | 20 GB 可用空间 | 50 GB（含 Isaac Sim） |
-| CPU | 4 核 | 8 核+ |
+```
+项目根目录/
+├── curobo/
+│   ├── my_x_trainer/          ← [新增] 机器人 URDF + cuRobo 配置
+│   │   ├── build_model.py
+│   │   ├── xtrainer.urdf
+│   │   └── xtrainer.yml
+│   └── third_party/           ← [已有] cuRobo 第三方库（不要动）
+│       ├── curobo_python/
+│       ├── curobo_torch/
+│       └── geometric_algo/
+├── docs/
+│   └── LICENSE
+├── policy_server/
+│   └── __init__.py            ← [已有] 策略服务器
+├── x-trainer/
+│   └── source/leisaac/leisaac/
+│       └── motion_planning/   ← [新增] 运动规划模块（7个文件）
+│           ├── __init__.py
+│           ├── coordinate_transform.py
+│           ├── ik_solver.py
+│           ├── motion_planner.py
+│           ├── planner_interface.py
+│           ├── task_state_machine.py
+│           └── test_motion_planning.py
+├── README.md
+└── setup.py
+```
 
-### 软件
+**关键区分：**
+- `[已有]` 的文件 — **不要修改**，除非你明确知道要改什么
+- `[新增]` 的文件 — 从 GitHub 拉取，不会覆盖已有文件
 
-| 软件 | 版本 | 说明 |
-|------|------|------|
-| 操作系统 | Ubuntu 20.04 / 22.04 | 推荐 22.04 |
-| NVIDIA 驱动 | >= 525.x | `nvidia-smi` 检查 |
-| CUDA | >= 11.8 | cuRobo 依赖 |
-| Python | 3.10 | Isaac Sim 自带或 conda 环境 |
-| PyTorch | >= 2.0 (CUDA) | `torch.cuda.is_available()` 必须为 True |
-| Isaac Sim | 2023.1+ | 仿真环境（可选，测试阶段可不用） |
-| cuRobo | 0.8.0+ | GPU 运动规划核心库 |
+---
 
-### 检查命令速查
+## 2. 备份现有项目
+
+**在做任何操作之前，先备份！** 这样即使出错也能恢复。
 
 ```bash
-# GPU 驱动
-nvidia-smi
+# 进入项目根目录（根据你的实际路径调整）
+cd /path/to/your/x-trainer/project
 
-# CUDA 版本
-nvcc --version
+# 创建备份（带日期）
+cp -r . ../x-trainer-backup-$(date +%Y%m%d)
 
-# Python 版本
+# 或者用 git 备份当前状态
+git stash  # 如果有未提交的修改
+git branch backup-before-merge  # 创建备份分支
+```
+
+---
+
+## 3. 拉取 GitHub 上的新文件
+
+### 3.1 添加 GitHub 远程仓库
+
+```bash
+cd /path/to/your/x-trainer/project
+
+# 检查现有远程仓库
+git remote -v
+# 应该看到 origin 指向 gitee（或你之前用的仓库）
+
+# 添加我们的 GitHub 仓库作为新的远程源
+git remote add github https://github.com/JJ66-git/Dobot-curobo.git
+
+# 验证
+git remote -v
+# 应该看到：
+# origin    https://gitee.com/... (fetch)
+# origin    https://gitee.com/... (push)
+# github    https://github.com/JJ66-git/Dobot-curobo.git (fetch)
+# github    https://github.com/JJ66-git/Dobot-curobo.git (push)
+```
+
+### 3.2 先看有哪些新文件（不要直接合并！）
+
+```bash
+# 查看 GitHub 分支和本地分支的差异
+git fetch github
+
+# 查看 GitHub 上有哪些文件是我们本地没有的
+git diff master github/master --stat
+```
+
+输出会告诉你哪些文件是新增的、哪些是修改的。
+
+### 3.3 只拉取需要的文件（安全方式）
+
+**不要直接 `git merge`！** 那样可能会覆盖你现有的文件。我们只提取需要的新文件：
+
+```bash
+# === 新增文件 1：curobo/my_x_trainer/ ===
+# 这个目录在你的项目中可能还不存在，直接检出
+
+git checkout github/master -- curobo/my_x_trainer/build_model.py
+git checkout github/master -- curobo/my_x_trainer/xtrainer.urdf
+git checkout github/master -- curobo/my_x_trainer/xtrainer.yml
+
+# === 新增文件 2：motion_planning 模块 ===
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/__init__.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/coordinate_transform.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/ik_solver.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/motion_planner.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/planner_interface.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/task_state_machine.py
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/test_motion_planning.py
+
+# === 可选文件 ===
+git checkout github/master -- .gitignore
+git checkout github/master -- MOTION_PLANNING_TUTORIAL.md
+git checkout github/master -- MOTION_PLANNING_DEPLOY_GUIDE.md
+```
+
+> **这些命令的含义：** 从 `github/master` 分支中取出指定文件，放到你的工作目录中。
+> **不会删除** 你现有的任何文件，只会新增或更新列出的文件。
+
+### 3.4 提交这些新文件
+
+```bash
+# 查看状态
+git status
+# 你应该只看到新增/修改的文件，不会看到任何删除
+
+# 提交
+git commit -m "Add motion planning module for X-Trainer dual-arm robot"
+```
+
+---
+
+## 4. 检查文件是否到位
+
+运行以下命令，确认所有文件都已就位：
+
+```bash
+# 检查 curobo 配置
+ls -la curobo/my_x_trainer/
+# 应该有: build_model.py  xtrainer.urdf  xtrainer.yml
+
+# 检查 motion_planning 模块
+ls -la x-trainer/source/leisaac/leisaac/motion_planning/
+# 应该有 7 个 .py 文件
+
+# 检查 .gitignore（确保 curobo/third_party/ 不会被 git 跟踪）
+cat .gitignore
+```
+
+如果某个目录或文件不存在，检查路径是否正确。你的项目根目录可能不在 `~/Dobot-curobo/`，而是在其他位置。
+
+---
+
+## 5. 安装 Python 依赖
+
+### 5.1 检查现有环境
+
+```bash
+# 查看当前 Python 环境
+which python3
 python3 --version
 
-# PyTorch + CUDA
-python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+# 检查 PyTorch 是否已安装且支持 CUDA
+python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available())"
 ```
 
----
+如果 PyTorch 已安装且 `CUDA: True`，跳到 5.3。
 
-## 2. 克隆项目到工作站
-
-### 2.1 SSH 方式（推荐）
+### 5.2 安装 PyTorch（如果没有）
 
 ```bash
-# 如果还没配置 SSH key，先生成
-ssh-keygen -t ed25519 -C "your_email@example.com"
-cat ~/.ssh/id_ed25519.pub
-# 把输出的公钥添加到 GitHub: Settings → SSH and GPG keys → New SSH key
-
-# 克隆
-cd ~
-git clone git@github.com:JJ66-git/Dobot-curobo.git
-cd Dobot-curobo
-```
-
-### 2.2 HTTPS 方式
-
-```bash
-cd ~
-git clone https://github.com/JJ66-git/Dobot-curobo.git
-cd Dobot-curobo
-```
-
-### 2.3 验证项目结构
-
-```bash
-tree -L 3 -I __pycache__
-```
-
-你应该看到类似这样的结构：
-
-```
-Dobot-curobo/
-├── .gitignore
-├── MOTION_PLANNING_TUTORIAL.md
-├── MOTION_PLANNING_DEPLOY_GUIDE.md    ← 本文件
-├── curobo/
-│   └── my_x_trainer/
-│       ├── build_model.py
-│       ├── xtrainer.urdf
-│       └── xtrainer.yml
-└── x-trainer/
-    └── source/leisaac/leisaac/
-        └── motion_planning/
-            ├── __init__.py
-            ├── coordinate_transform.py
-            ├── ik_solver.py
-            ├── motion_planner.py
-            ├── planner_interface.py
-            ├── task_state_machine.py
-            └── test_motion_planning.py
-```
-
----
-
-## 3. 安装 Python 依赖
-
-### 3.1 创建 conda 环境（推荐）
-
-```bash
-# 创建独立环境
+# 创建 conda 环境（如果还没有）
 conda create -n curobo python=3.10 -y
 conda activate curobo
 
 # 安装 PyTorch（根据你的 CUDA 版本选择）
-# CUDA 11.8
+# 查看 CUDA 版本: nvidia-smi
+# CUDA 11.8:
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-# CUDA 12.1
+# CUDA 12.1:
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# 验证
-python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available())"
 ```
 
-> **输出应为：** `PyTorch: 2.x.x` 和 `CUDA: True`
-
-### 3.2 安装基础依赖
+### 5.3 安装项目依赖
 
 ```bash
 pip install numpy scipy pyyaml
 ```
 
-### 3.3 安装 Isaac Sim（如果需要仿真集成）
+### 5.4 验证 cuRobo 已可用
 
 ```bash
-# 方法 A：通过 pip 安装（推荐）
-pip install isaacsim-rl isaacsim-replicator isaacsim-extscache-physics isaacsim-extscache-kit-sdk isaacsim-app
-
-# 方法 B：通过 NVIDIA Omniverse Launcher 安装
-# 从 https://developer.nvidia.com/isaac-sim 下载
-# 安装后设置环境变量：
-# export ISAACSIM_PATH=~/.local/share/ov/pkg/isaac-sim-2023.1.1
-# source $ISAACSIM_PATH/setup_conda_env.sh
+python3 -c "from curobo.wrap.reacher.ik_solver import IKSolver; print('cuRobo OK')"
 ```
 
----
-
-## 4. 配置 cuRobo
-
-### 4.1 安装 cuRobo
+如果报错 `ModuleNotFoundError: No module named 'curobo'`，说明 cuRobo 还没安装：
 
 ```bash
-# 克隆 cuRobo
-cd ~
-git clone https://github.com/NVlabs/curobo.git
-cd curobo
-
-# 安装（会编译 CUDA 内核，需要几分钟）
+# 进入项目的 third_party 目录
+cd curobo/third_party/curobo_python
 pip install -e .
-
-# 验证安装
-python -c "from curobo.wrap.reacher.ik_solver import IKSolver; print('cuRobo OK')"
+cd ../../..
 ```
 
-> **注意：** 首次安装 cuRobo 会编译 CUDA kernel，可能需要 5-10 分钟。编译失败通常是因为 CUDA 版本不匹配。
-
-### 4.2 配置机器人模型路径
-
-cuRobo 需要知道你的 URDF 和 YAML 配置文件在哪里。有两种方式：
-
-**方式 A：符号链接（推荐）**
+或者如果 cuRobo 是独立安装的：
 
 ```bash
-# 将你的机器人配置链接到 cuRobo 的资源目录
-ln -s ~/Dobot-curobo/curobo/my_x_trainer ~/curobo/src/curobo/content/configs/robot/xtrainer
+cd ~/curobo  # 你之前安装 cuRobo 的位置
+pip install -e .
 ```
 
-**方式 B：环境变量**
+---
+
+## 6. 配置 cuRobo 识别新机器人
+
+cuRobo 需要知道 `xtrainer.yml` 在哪里。
+
+### 方式 A：符号链接（推荐）
 
 ```bash
-# 在 ~/.bashrc 或 conda 环境变量中添加
-export CUROBO_CONFIG_DIR=~/Dobot-curobo/curobo/my_x_trainer
+# 找到 cuRobo 的配置目录
+# 如果 cuRobo 是 pip install 安装的：
+CUROBO_CONFIG_DIR=$(python3 -c "import curobo; import os; print(os.path.join(os.path.dirname(curobo.__file__), 'content', 'configs', 'robot'))")
+echo "cuRobo 配置目录: $CUROBO_CONFIG_DIR"
 
-# 使生效
-source ~/.bashrc
+# 创建符号链接
+ln -sf "$(pwd)/curobo/my_x_trainer" "$CUROBO_CONFIG_DIR/xtrainer"
+
+# 验证
+ls -la "$CUROBO_CONFIG_DIR/xtrainer"
+# 应该指向 curobo/my_x_trainer/ 并看到 xtrainer.yml
 ```
 
-### 4.3 验证 cuRobo 能找到机器人配置
+### 方式 B：直接指定绝对路径
+
+如果符号链接不方便，可以在代码中直接用绝对路径：
 
 ```python
-# test_curobo_config.py
-from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+# 在你的代码中
+import os
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+URDF_PATH = os.path.join(PROJECT_ROOT, "curobo", "my_x_trainer", "xtrainer.urdf")
+YAML_PATH = os.path.join(PROJECT_ROOT, "curobo", "my_x_trainer", "xtrainer.yml")
+```
 
+### 验证 cuRobo 能加载机器人
+
+```bash
+cd /path/to/your/x-trainer/project
+
+python3 -c "
+from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
 try:
-    config = IKSolverConfig.from_robot_yaml(
-        "xtrainer.yml",  # cuRobo 会在配置路径中查找
-        num_seeds=4,
-        self_collision_check=True,
-    )
+    config = IKSolverConfig.from_robot_yaml('xtrainer.yml', num_seeds=4, self_collision_check=True)
     solver = IKSolver(config)
-    print("[OK] cuRobo 成功加载 xtrainer.yml")
+    print('[OK] cuRobo 成功加载 xtrainer.yml')
 except Exception as e:
-    print(f"[FAIL] 加载失败: {e}")
-```
-
-运行：
-```bash
-python test_curobo_config.py
+    print(f'[FAIL] 加载失败: {e}')
+"
 ```
 
 ---
 
-## 5. 验证 URDF 模型
+## 7. 运行运动规划模块测试
 
-### 5.1 用 cuRobo 验证 URDF
-
-```python
-# test_urdf_validation.py
-import torch
-from curobo.geom.types import Cuboid
-from curobo.types.math import Pose
-from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-
-# 加载 IK 求解器
-config = IKSolverConfig.from_robot_yaml(
-    "xtrainer.yml",
-    num_seeds=32,
-    self_collision_check=True,
-)
-solver = IKSolver(config)
-
-# 测试：求解一个简单的目标位姿
-target = Pose(
-    position=torch.tensor([[0.3, 0.2, 0.3]]).cuda(),
-    quaternion=torch.tensor([[1.0, 0.0, 0.0, 0.0]]).cuda(),
-)
-
-result = solver.solve_single(target)
-
-print(f"成功: {result.success.item()}")
-print(f"关节角度: {result.joint_position.cpu().numpy().tolist()}")
-print(f"位置误差: {result.position_error.item() * 1000:.2f} mm")
-print(f"姿态误差: {result.rotation_error.item():.4f} rad")
-```
-
-运行：
-```bash
-python test_urdf_validation.py
-```
-
-### 5.2 用 build_model.py 重新生成配置（如果修改了 URDF）
+### 7.1 运行完整测试套件
 
 ```bash
-cd ~/Dobot-curobo/curobo/my_x_trainer
-python build_model.py
-# 会重新生成 xtrainer.yml
+cd /path/to/your/x-trainer/project/x-trainer/source/leisaac
+python3 -m leisaac.motion_planning.test_motion_planning
 ```
 
----
-
-## 6. 运行运动规划模块测试
-
-### 6.1 运行完整测试套件
-
-```bash
-cd ~/Dobot-curobo
-
-# 运行测试
-python -m x-trainer.source.leisaac.leisaac.motion_planning.test_motion_planning
-```
-
-或者直接运行：
-
-```bash
-cd ~/Dobot-curobo/x-trainer/source/leisaac
-python -m leisaac.motion_planning.test_motion_planning
-```
-
-### 6.2 预期输出
-
-测试套件包含 5 个测试，输出类似：
+### 7.2 预期输出
 
 ```
 ============================================================
@@ -351,108 +356,40 @@ Result: 5/5 passed
 ============================================================
 ```
 
-### 6.3 单独运行某个测试（调试用）
+### 7.3 单独运行某个测试（调试用）
 
-如果某个测试失败，可以单独运行它来排查：
-
-```python
-# 在 Python 中运行单个测试
-from leisaac.motion_planning.test_motion_planning import (
-    test_coordinate_transform,
-    test_ik_solver,
-    test_motion_planner,
-    test_state_machine,
-    test_full_pipeline,
-)
-
-# 只运行 IK 测试
+```bash
+python3 -c "
+from leisaac.motion_planning.test_motion_planning import test_ik_solver
 test_ik_solver()
+"
 ```
 
 ---
 
-## 7. 与 Isaac Sim 集成
+## 8. 与 Isaac Sim / policy_server 集成
 
-### 7.1 启动 Isaac Sim 并加载场景
+### 8.1 在 policy_server 中引入运动规划模块
+
+在你现有的 `policy_server/__init__.py`（或对应的 server 文件）中添加：
 
 ```python
-# 在 Isaac Sim 的 Python 环境中运行
-from omni.isaac.core import World
+# 在文件顶部添加导入
+import sys
+import os
+
+# 确保 motion_planning 模块可以被找到
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "x-trainer", "source", "leisaac"))
+
 from leisaac.motion_planning import MotionPlanningModule
 
-# 创建仿真世界
-world = World(stage_units_in_meters=1.0)
-
-# 加载你的场景（桌子、篮子等）
-# ... 这里是你的场景加载代码 ...
-
-# 初始化运动规划模块
-module = MotionPlanningModule()
-module.warmup()  # 首次调用会初始化 cuRobo，耗时几秒
-
-# 获取当前关节状态（从仿真中读取）
-# module.set_joint_state("left", [0, 0, 0, 0, 0, 0])
-# module.set_joint_state("right", [0, 0, 0, 0, 0, 0])
-```
-
-### 7.2 完整的抓取流程示例
-
-```python
-from leisaac.motion_planning import MotionPlanningModule, SceneBuilder
-
-module = MotionPlanningModule()
-module.warmup()
-
-# 1. 设置障碍物（桌子、篮子等）
-scene = SceneBuilder()
-scene.add_table(
-    name="work_table",
-    position=[0.5, 0.0, 0.0],
-    dimensions=[0.8, 1.0, 0.02],
-)
-scene.add_basket(
-    name="basket",
-    position=[0.5, 0.3, 0.15],
-    dimensions=[0.25, 0.2, 0.15],
-)
-
-# 2. 从相机获取目标物体位姿（相机坐标系）
-# pixel_u, pixel_v = 320, 240  # 检测到的像素坐标
-# depth = 0.5  # 深度值（米）
-
-# 3. 转换到基座坐标系
-# base_pose = module.transform_camera_to_base(
-#     pixel_u, pixel_v, depth,
-#     camera_intrinsics=your_camera_intrinsics,
-#     camera_extrinsics=your_camera_extrinsics,
-# )
-
-# 4. 规划抓取
-# result = module.plan_grasp_sequence(
-#     target_pose=base_pose,
-#     place_pose={"position": [0.5, 0.3, 0.25], "quaternion": [1,0,0,0]},
-#     obstacles=scene.get_obstacles(),
-#     arm="left",
-# )
-
-# if result.success:
-#     trajectory = result.trajectory
-#     # 将轨迹发送给仿真中的机器人执行
-#     for waypoint in trajectory:
-#         # 设置关节位置
-#         pass
-```
-
-### 7.3 在 policy_server 中集成
-
-如果你使用 gRPC policy_server 架构：
-
-```python
-# 在 policy_server.py 中添加
-from leisaac.motion_planning import MotionPlanningModule
-
+# 在你的 PolicyServer 类中初始化
 class PolicyServer:
     def __init__(self):
+        # ... 你现有的初始化代码 ...
+
+        # 添加运动规划模块
         self.planner = MotionPlanningModule()
         self.planner.warmup()
 
@@ -474,148 +411,149 @@ class PolicyServer:
         )
 ```
 
+### 8.2 在 Isaac Sim 中使用
+
+```python
+from leisaac.motion_planning import MotionPlanningModule, SceneBuilder
+
+module = MotionPlanningModule()
+module.warmup()
+
+# 设置障碍物
+scene = SceneBuilder()
+scene.add_table("work_table", position=[0.5, 0.0, 0.0], dimensions=[0.8, 1.0, 0.02])
+
+# 规划
+target = {"position": [0.3, 0.2, 0.3], "quaternion": [1, 0, 0, 0]}
+result = module.plan(target, obstacles=scene.get_obstacles(), arm="left")
+
+if result.success:
+    # result.trajectory 是关节角度轨迹，可以直接发送给仿真机器人执行
+    for waypoint in result.trajectory:
+        # 设置关节位置
+        pass
+```
+
 ---
 
-## 8. 常见问题排查
+## 9. 常见问题排查
 
-### 8.1 `CUDA not available` 或 `torch.cuda.is_available()` 返回 False
+### 9.1 `fatal: pathspec did not match any files`
+
+**原因：** GitHub 上的文件路径和你本地的项目路径不一致。
 
 ```bash
-# 检查驱动
-nvidia-smi
+# 先看看 GitHub 上有什么
+git ls-tree -r --name-only github/master
 
-# 检查 PyTorch CUDA 版本是否匹配
-python -c "import torch; print(torch.version.cuda)"
+# 如果路径不同，手动创建目录再检出
+mkdir -p x-trainer/source/leisaac/leisaac/motion_planning
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/
+```
+
+### 9.2 `CUDA not available` / `torch.cuda.is_available()` 返回 False
+
+```bash
+nvidia-smi                           # 检查 GPU 驱动
+python3 -c "import torch; print(torch.version.cuda)"  # 检查 PyTorch CUDA 版本
 
 # 如果不匹配，重装 PyTorch
 pip uninstall torch torchvision -y
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 8.2 cuRobo 安装失败（编译 CUDA kernel 出错）
+### 9.3 `ModuleNotFoundError: No module named 'curobo'`
 
 ```bash
-# 确认 CUDA toolkit 版本
-nvcc --version
+# 方式 1：通过项目内的 third_party 安装
+cd curobo/third_party/curobo_python
+pip install -e .
 
-# 确认 gcc 版本（cuRobo 需要 gcc >= 7）
-gcc --version
-
-# 如果 gcc 太旧
-sudo apt install gcc-11 g++-11
-export CC=gcc-11
-export CXX=g++-11
-
-# 重新安装 cuRobo
+# 方式 2：如果你之前独立安装过 cuRobo
 cd ~/curobo
-pip install -e . --no-cache-dir
+pip install -e .
 ```
 
-### 8.3 `ModuleNotFoundError: No module named 'leisaac'`
+### 9.4 `ModuleNotFoundError: No module named 'leisaac'`
 
 ```bash
-# 确保你在正确的目录下运行
-cd ~/Dobot-curobo/x-trainer/source/leisaac
-python -m leisaac.motion_planning.test_motion_planning
+# 确保从正确的目录运行
+cd /path/to/your/x-trainer/project/x-trainer/source/leisaac
+python3 -m leisaac.motion_planning.test_motion_planning
 
-# 或者把路径加到 PYTHONPATH
-export PYTHONPATH=$PYTHONPATH:~/Dobot-curobo/x-trainer/source/leisaac
-python -c "from leisaac.motion_planning import MotionPlanningModule; print('OK')"
+# 或者设置 PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:/path/to/your/x-trainer/project/x-trainer/source/leisaac
 ```
 
-### 8.4 IK 求解全部失败（success=False）
+### 9.5 IK 求解全部失败（success=False）
 
-可能原因：
-1. **目标超出工作空间** — 检查目标位置是否在机器人臂长范围内（约 0.5m）
-2. **URDF 关节限位过窄** — 检查 `xtrainer.urdf` 中的 `limit` 标签
-3. **cuRobo 配置错误** — 重新运行 `build_model.py` 生成配置
-
-```python
-# 快速诊断：测试一个肯定在工作空间内的目标
-target = {"position": [0.2, 0.1, 0.2], "quaternion": [1, 0, 0, 0]}
-result = module.plan(target, obstacles=[], arm="left")
-print(result)
+```bash
+# 快速诊断：测试一个在工作空间内的近处目标
+python3 -c "
+from leisaac.motion_planning import MotionPlanningModule
+m = MotionPlanningModule()
+m.warmup()
+r = m.plan({'position': [0.2, 0.1, 0.2], 'quaternion': [1,0,0,0]}, [], 'left')
+print(r)
+"
 ```
 
-### 8.5 运动规划失败（plan_to_pose 返回 success=False）
+如果仍然失败，检查：
+1. `xtrainer.urdf` 中的关节限位是否合理
+2. 运行 `python3 curobo/my_x_trainer/build_model.py` 重新生成配置
+3. 启用日志：`logging.getLogger("curobo").setLevel(logging.DEBUG)`
 
-可能原因：
-1. **碰撞** — 目标位姿或路径上有障碍物，用 `SceneBuilder` 检查场景
-2. **关节限位** — 路径上某些关节超出限位
-3. **规划超时** — 增加 `max_time` 参数（默认 2 秒）
-
-```python
-# 增加规划时间
-planner = DualArmMotionPlanner(max_time=5.0)
-```
-
-### 8.6 `FileNotFoundError: xtrainer.yml not found`
+### 9.6 `FileNotFoundError: xtrainer.yml not found`
 
 ```bash
 # 确认文件存在
-ls ~/Dobot-curobo/curobo/my_x_trainer/xtrainer.yml
+ls curobo/my_x_trainer/xtrainer.yml
 
-# 确认 cuRobo 能找到它
-# 方式 A：符号链接
-ln -s ~/Dobot-curobo/curobo/my_x_trainer ~/curobo/src/curobo/content/configs/robot/xtrainer
+# 确认符号链接正确
+CUROBO_CONFIG_DIR=$(python3 -c "import curobo,os;print(os.path.join(os.path.dirname(curobo.__file__),'content','configs','robot'))")
+ls -la "$CUROBO_CONFIG_DIR/xtrainer"
+```
 
-# 方式 B：在代码中使用绝对路径
-config = IKSolverConfig.from_robot_yaml(
-    "/home/your_username/Dobot-curobo/curobo/my_x_trainer/xtrainer.yml",
-    ...
-)
+### 9.7 规划失败（plan_to_pose 返回 success=False）
+
+可能原因：
+1. **碰撞** — 目标位姿或路径上有障碍物
+2. **关节限位** — 路径上某些关节超出限位
+3. **规划超时** — 增加规划时间
+
+```python
+# 增加规划时间
+from leisaac.motion_planning.motion_planner import DualArmMotionPlanner
+planner = DualArmMotionPlanner(max_time=5.0)  # 默认 2 秒
 ```
 
 ---
 
-## 9. 调试技巧
+## 10. 调试技巧
 
-### 9.1 用 cuRobo 可视化工具检查机器人
-
-```python
-# 在 Isaac Sim 中可视化机器人
-from omni.isaac.core.robots import Robot
-
-# 加载 URDF
-robot = Robot(
-    prim_path="/World/XTrainer",
-    usd_path="~/Dobot-curobo/curobo/my_x_trainer/xtrainer.urdf",
-    name="xtrainer",
-)
-world.scene.add(robot)
-world.reset()
-
-# 设置关节位置，观察机器人姿态
-robot.set_joint_positions([0.5, -0.3, 0.2, -0.1, 0.4, -0.2] * 2)
-```
-
-### 9.2 打印 IK 求解过程
+### 10.1 打印 IK 求解详细日志
 
 ```python
 import logging
 logging.basicConfig(level=logging.DEBUG)
-
-# 或者只看 cuRobo 的日志
 logging.getLogger("curobo").setLevel(logging.DEBUG)
 ```
 
-### 9.3 导出轨迹为 CSV 分析
+### 10.2 导出轨迹为 CSV
 
 ```python
 import csv
-
 result = module.plan(target_pose, obstacles=[], arm="left")
 if result.success:
     with open("trajectory.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["t", "j1", "j2", "j3", "j4", "j5", "j6"])
         for i, q in enumerate(result.trajectory):
-            t = i * 0.02  # dt=0.02s
-            writer.writerow([t] + q)
+            writer.writerow([i * 0.02] + q)
     print("轨迹已保存到 trajectory.csv")
 ```
 
-### 9.4 用 matplotlib 可视化关节轨迹
+### 10.3 用 matplotlib 可视化关节轨迹
 
 ```python
 import matplotlib.pyplot as plt
@@ -624,131 +562,89 @@ import csv
 times, joints = [], []
 with open("trajectory.csv") as f:
     reader = csv.reader(f)
-    next(reader)  # skip header
+    next(reader)
     for row in reader:
         times.append(float(row[0]))
         joints.append([float(x) for x in row[1:]])
 
-joints = list(zip(*joints))  # 转置
-
+joints = list(zip(*joints))
 fig, axes = plt.subplots(3, 2, figsize=(12, 8))
 for i, ax in enumerate(axes.flat):
     ax.plot(times, joints[i])
     ax.set_title(f"Joint {i+1}")
     ax.set_ylabel("Angle (rad)")
-    ax.set_xlabel("Time (s)")
     ax.grid(True)
 plt.tight_layout()
 plt.savefig("joint_trajectory.png", dpi=150)
-print("图已保存到 joint_trajectory.png")
 ```
 
-### 9.5 性能分析
+### 10.4 性能分析
 
 ```python
 import time
-
-# 测量 IK 求解时间
+module.warmup()
 target = {"position": [0.3, 0.2, 0.3], "quaternion": [1, 0, 0, 0]}
 
-# 预热
-module.warmup()
-
-# 计时
 times = []
 for _ in range(100):
     start = time.perf_counter()
-    result = module.plan(target, obstacles=[], arm="left")
+    module.plan(target, [], "left")
     times.append(time.perf_counter() - start)
 
-print(f"IK 求解: 平均 {sum(times)/len(times)*1000:.1f} ms")
-print(f"IK 求解: 最快 {min(times)*1000:.1f} ms")
-print(f"IK 求解: 最慢 {max(times)*1000:.1f} ms")
+print(f"平均: {sum(times)/len(times)*1000:.1f} ms")
+print(f"最快: {min(times)*1000:.1f} ms")
+print(f"最慢: {max(times)*1000:.1f} ms")
 ```
 
 ---
 
-## 附录 A：快速部署脚本
-
-将以下内容保存为 `setup_workstation.sh`，一键部署：
+## 附录 A：快速操作清单（TL;DR）
 
 ```bash
-#!/bin/bash
-set -e
+# 1. 备份
+cd /path/to/project
+cp -r . ../backup-$(date +%Y%m%d)
 
-echo "=== Dobot X-Trainer 运动规划模块 - 工作站部署脚本 ==="
+# 2. 添加远程仓库
+git remote add github https://github.com/JJ66-git/Dobot-curobo.git
+git fetch github
 
-# 1. 检查 GPU
-echo "[1/6] 检查 GPU..."
-nvidia-smi || { echo "错误: 未检测到 NVIDIA GPU"; exit 1; }
+# 3. 拉取新文件
+git checkout github/master -- curobo/my_x_trainer/
+git checkout github/master -- x-trainer/source/leisaac/leisaac/motion_planning/
+git checkout github/master -- .gitignore
 
-# 2. 创建 conda 环境
-echo "[2/6] 创建 conda 环境..."
-conda create -n curobo python=3.10 -y
-conda activate curobo
+# 4. 提交
+git commit -m "Add motion planning module for X-Trainer"
 
-# 3. 安装 PyTorch
-echo "[3/6] 安装 PyTorch..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# 5. 配置 cuRobo
+ln -sf "$(pwd)/curobo/my_x_trainer" "$(python3 -c 'import curobo,os;print(os.path.join(os.path.dirname(curobo.__file__),"content","configs","robot"))')/xtrainer"
 
-# 4. 安装 cuRobo
-echo "[4/6] 安装 cuRobo..."
-cd ~
-git clone https://github.com/NVlabs/curobo.git || true
-cd curobo
-pip install -e .
-
-# 5. 克隆项目
-echo "[5/6] 克隆项目..."
-cd ~
-git clone git@github.com:JJ66-git/Dobot-curobo.git || true
-cd Dobot-curobo
-
-# 6. 配置符号链接
-echo "[6/6] 配置符号链接..."
-ln -sf ~/Dobot-curobo/curobo/my_x_trainer ~/curobo/src/curobo/content/configs/robot/xtrainer
-
-# 安装基础依赖
-pip install numpy scipy pyyaml
-
-echo ""
-echo "=== 部署完成！==="
-echo "运行测试: cd ~/Dobot-curobo/x-trainer/source/leisaac && python -m leisaac.motion_planning.test_motion_planning"
+# 6. 运行测试
+cd x-trainer/source/leisaac
+python3 -m leisaac.motion_planning.test_motion_planning
 ```
 
 ---
 
-## 附录 B：测试检查清单
+## 附录 B：文件依赖关系
 
-在调试前，确认以下各项：
+```
+planner_interface.py  ← 统一接口（主要调用这个）
+    ├── ik_solver.py         ← cuRobo IK 求解（需要 GPU）
+    ├── motion_planner.py    ← cuRobo 轨迹规划（需要 GPU）
+    ├── coordinate_transform.py  ← 坐标转换（无 GPU 依赖）
+    └── task_state_machine.py    ← 状态机（无 GPU 依赖）
+```
+
+## 附录 C：测试检查清单
 
 - [ ] `nvidia-smi` 能看到 GPU
-- [ ] `python -c "import torch; print(torch.cuda.is_available())"` 输出 `True`
-- [ ] `python -c "from curobo.wrap.reacher.ik_solver import IKSolver"` 无报错
-- [ ] `ls ~/curobo/src/curobo/content/configs/robot/xtrainer/xtrainer.yml` 文件存在
-- [ ] `python -m leisaac.motion_planning.test_motion_planning` 全部通过
+- [ ] `python3 -c "import torch; print(torch.cuda.is_available())"` 输出 `True`
+- [ ] `python3 -c "from curobo.wrap.reacher.ik_solver import IKSolver"` 无报错
+- [ ] `ls curobo/my_x_trainer/xtrainer.yml` 文件存在
+- [ ] `python3 -m leisaac.motion_planning.test_motion_planning` 全部通过
 
 ---
 
-## 附录 C：文件依赖关系
-
-```
-planner_interface.py  ← 统一接口（你主要调用这个）
-    ├── ik_solver.py         ← cuRobo IK 求解
-    ├── motion_planner.py    ← cuRobo 轨迹规划
-    ├── coordinate_transform.py  ← 坐标转换
-    └── task_state_machine.py    ← 状态机
-
-planner_interface.py
-    └── 需要: curobo, torch, numpy
-
-coordinate_transform.py
-    └── 需要: numpy, scipy（无 GPU 依赖）
-
-task_state_machine.py
-    └── 需要: 无外部依赖（纯 Python）
-```
-
----
-
-**下一步：** 在工作站上按照本文档的顺序（1→9）逐步操作。如果遇到问题，直接跳到第 8 节排查。
+**下一步：** 按照第 2 节（备份）→ 第 3 节（拉取）→ 第 4 节（检查）的顺序操作。
