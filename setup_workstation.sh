@@ -30,14 +30,15 @@ pip install -e .
 echo "[5/6] 克隆项目..."
 cd ~
 if [ ! -d "Dobot-curobo" ]; then
-    git clone git@github.com:JJ66-git/Dobot-curobo.git
+    git clone https://github.com/JJ66-git/Dobot-curobo.git
 fi
 cd Dobot-curobo
 
 # 6. 配置符号链接
 echo "[6/6] 配置符号链接..."
-mkdir -p ~/curobo/src/curobo/content/configs/robot
-ln -sf ~/Dobot-curobo/curobo/my_x_trainer ~/curobo/src/curobo/content/configs/robot/xtrainer
+CUROBO_ROBOT_DIR=$(python -c "import curobo, os; print(os.path.join(os.path.dirname(curobo.__file__), 'content', 'configs', 'robot'))")
+mkdir -p "$CUROBO_ROBOT_DIR"
+ln -sf "$(pwd)/curobo/my_x_trainer" "$CUROBO_ROBOT_DIR/xtrainer"
 
 # 安装基础依赖
 pip install numpy scipy pyyaml

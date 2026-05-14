@@ -20,11 +20,16 @@ import numpy as np
 from typing import Dict, List, Optional
 
 from .coordinate_transform import CameraToBaseTransformer
-from .ik_solver import DualArmIKSolver
-from .motion_planner import DualArmMotionPlanner, SceneBuilder
 from .task_state_machine import (
     GraspTaskStateMachine, WaypointManager, Pose, TaskConfig, TaskState,
 )
+
+try:
+    from .ik_solver import DualArmIKSolver
+    from .motion_planner import DualArmMotionPlanner, SceneBuilder
+    _HAS_CUROBO = True
+except ImportError:
+    _HAS_CUROBO = False
 
 
 # ============================================================
@@ -136,6 +141,13 @@ class MotionPlanningModule:
             ik_num_seeds:        IK 并行种子数
             self_collision_check: 是否启用自碰撞检测
         """
+        if not _HAS_CUROBO:
+            raise ImportError(
+                "cuRobo 未安装，无法使用 MotionPlanningModule。\n"
+                "请确保已安装 curobo 和 torch (CUDA 版本)。\n"
+                "在 Ubuntu 上运行 setup_workstation.sh 进行部署。"
+            )
+
         print("=" * 50)
         print("初始化运动规划模块")
         print("=" * 50)

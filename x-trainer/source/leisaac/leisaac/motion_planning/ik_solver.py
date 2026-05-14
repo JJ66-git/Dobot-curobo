@@ -51,7 +51,8 @@ class DualArmIKSolver:
 
     def __init__(self, robot_config: str = "xtrainer.yml",
                  num_seeds: int = 32,
-                 self_collision_check: bool = True):
+                 self_collision_check: bool = True,
+                 device: str = None):
         """
         初始化 IK 求解器。
 
@@ -61,8 +62,10 @@ class DualArmIKSolver:
                           或 Step 2 生成的 xtrainer.yml 的绝对路径。
             num_seeds: 并行优化种子数。越多越准确但越慢，推荐 32。
             self_collision_check: 是否启用自碰撞检测，推荐 True。
+            device: 计算设备，默认自动选择 ("cuda" 如果有 GPU，否则 "cpu")。
         """
         self.num_seeds = num_seeds
+        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         # ---- 创建 IK 配置 ----
         # InverseKinematicsCfg.create() 会解析 YAML 中的 URDF、碰撞球、关节空间等
@@ -162,16 +165,16 @@ class DualArmIKSolver:
         # ---- 构造 cuRobo Pose 张量 ----
         # shape = (1, 3) 和 (1, 4)，batch 维度为 1
         left_pos = torch.tensor(
-            [left_pose["position"]], dtype=torch.float32, device="cuda"
+            [left_pose["position"]], dtype=torch.float32, device=self._device
         )
         left_quat = torch.tensor(
-            [left_pose["quaternion"]], dtype=torch.float32, device="cuda"
+            [left_pose["quaternion"]], dtype=torch.float32, device=self._device
         )
         right_pos = torch.tensor(
-            [right_pose["position"]], dtype=torch.float32, device="cuda"
+            [right_pose["position"]], dtype=torch.float32, device=self._device
         )
         right_quat = torch.tensor(
-            [right_pose["quaternion"]], dtype=torch.float32, device="cuda"
+            [right_pose["quaternion"]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----
@@ -294,7 +297,7 @@ class DualArmIKSolver:
             full[6:12] = joint_angles
             target_frame = self._right_frame
 
-        joint_state = torch.tensor(full, device="cuda", dtype=torch.float32)
+        joint_state = torch.tensor(full, device=self._device, dtype=torch.float32)
 
         # cuRobo 正运动学
         kin = self._ik.compute_kinematics(joint_state)
@@ -330,10 +333,10 @@ class DualArmIKSolver:
 
         # ---- 构造 cuRobo Pose 张量 ----
         pos_tensor = torch.tensor(
-            [target_pose["position"]], dtype=torch.float32, device="cuda"
+            [target_pose["position"]], dtype=torch.float32, device=self._device
         )
         quat_tensor = torch.tensor(
-            [target_pose["quaternion"]], dtype=torch.float32, device="cuda"
+            [target_pose["quaternion"]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----

@@ -143,14 +143,17 @@ class DualArmMotionPlanner:
     """
 
     def __init__(self, robot_config: str = "xtrainer.yml",
-                 scene_model: Optional[str] = None):
+                 scene_model: Optional[str] = None,
+                 device: str = None):
         """
         初始化运动规划器。
 
         参数：
             robot_config: 机器人配置文件名或绝对路径
             scene_model:  场景配置文件名（可选，不传则无场景障碍物）
+            device:       计算设备，默认自动选择 ("cuda" 如果有 GPU，否则 "cpu")。
         """
+        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         # ---- 创建规划器配置 ----
         if scene_model:
             config = MotionPlannerCfg.create(
@@ -313,7 +316,7 @@ class DualArmMotionPlanner:
         # 但更简单的方式是用 FK 得到目标位姿，再用 plan_to_pose
         # 这里我们直接用 goal_joint_state 方式
         goal_js = JointState.from_position(
-            torch.tensor([full_goal], dtype=torch.float32, device="cuda"),
+            torch.tensor([full_goal], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
 
@@ -509,7 +512,7 @@ class DualArmMotionPlanner:
         full = np.zeros(12, dtype=np.float32)
         full[:6] = joints  # 左臂先填，实际规划时 cuRobo 会按 tool_frame 选取
         return JointState.from_position(
-            torch.tensor([full], dtype=torch.float32, device="cuda"),
+            torch.tensor([full], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
 
@@ -520,11 +523,11 @@ class DualArmMotionPlanner:
         """
         pos = torch.tensor(
             [[[[target_pose["position"]]]]],
-            dtype=torch.float32, device="cuda",
+            dtype=torch.float32, device=self._device,
         )  # shape = (1, 1, 1, 1, 3)
         quat = torch.tensor(
             [[[[target_pose["quaternion"]]]]],
-            dtype=torch.float32, device="cuda",
+            dtype=torch.float32, device=self._device,
         )  # shape = (1, 1, 1, 1, 4)
         return GoalToolPose(
             tool_frames=[target_frame],

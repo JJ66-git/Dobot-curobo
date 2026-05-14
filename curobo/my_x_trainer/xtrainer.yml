@@ -1,7 +1,7 @@
 robot_cfg:
   kinematics:
-    urdf_path: C:\jj\Dobot\Guangdong_Collegiate_Computing_Competition\curobo\my_x_trainer\xtrainer.urdf
-    asset_root_path: C:\jj\Dobot\Guangdong_Collegiate_Computing_Competition\curobo\my_x_trainer
+    urdf_path: xtrainer.urdf
+    asset_root_path: .
     base_link: world_base_link
     tool_frames:
     - left_ee_link

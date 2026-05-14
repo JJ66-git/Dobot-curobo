@@ -244,13 +244,14 @@ def build_and_save_yaml(urdf_path: str, tool_frames: list, output_path: str):
     # D. 组装数据结构
     # 注意：cuRobo YAML 的顶层 key 是 "robot_cfg"，其下是 "kinematics"
     print("\n[D] 组装配置数据...")
-    urdf_abs = str(Path(urdf_path).resolve())
+    urdf_filename = Path(urdf_path).name
+    asset_root = "."
 
     data_dict = {
         "robot_cfg": {
             "kinematics": {
-                "urdf_path": urdf_abs,
-                "asset_root_path": str(Path(urdf_path).parent.resolve()),
+                "urdf_path": urdf_filename,
+                "asset_root_path": asset_root,
                 "base_link": "world_base_link",
                 "tool_frames": tool_frames,
                 "collision_link_names": list(collision_spheres.keys()),
