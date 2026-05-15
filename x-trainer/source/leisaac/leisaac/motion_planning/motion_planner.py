@@ -161,6 +161,8 @@ class DualArmMotionPlanner:
             device:       计算设备，默认自动选择 ("cuda" 如果有 GPU，否则 "cpu")。
         """
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._robot_config_input = robot_config
+        self._fallback_ik_solver = None
         robot_config = build_curobo_robot_config(robot_config)
         planner_kwargs = {
             "robot": robot_config,
@@ -286,18 +288,24 @@ class DualArmMotionPlanner:
                 "n_waypoints": n_wp,
                 "error_message": "",
             }
-        else:
-            p = target_pose["position"]
-            return {
-                "success": False,
-                "trajectory": None,
-                "duration": 0.0,
-                "n_waypoints": 0,
-                "error_message": (
-                    f"{arm}臂规划失败：目标 [{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}] "
-                    f"可能超出工作空间或与障碍物冲突"
-                ),
-            }
+
+        # plan_pose 会在 cuRobo 内部重新做 IK；当该 IK 因 feasible=False 拒绝
+        # 已收敛目标时，回退到项目 IK + 关节空间规划，保留轨迹碰撞校验。
+        fallback = self._plan_to_pose_via_joint_goal(arm, target_pose, current_joints)
+        if fallback["success"]:
+            return fallback
+
+        p = target_pose["position"]
+        return {
+            "success": False,
+            "trajectory": None,
+            "duration": 0.0,
+            "n_waypoints": 0,
+            "error_message": (
+                f"{arm}臂规划失败：目标 [{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}] "
+                f"可能超出工作空间或与障碍物冲突；关节空间回退也失败：{fallback['error_message']}"
+            ),
+        }
 
     # ================================================================
     # 公开接口 3：plan_joint_to_joint —— 关节空间到关节空间规划
@@ -328,17 +336,18 @@ class DualArmMotionPlanner:
         indices = self._get_joint_indices(arm)
         full_goal[indices] = goal_joints
 
-        # cuRobo plan_pose 也支持 JointState 作为目标
-        # 但更简单的方式是用 FK 得到目标位姿，再用 plan_to_pose
-        # 这里我们直接用 goal_joint_state 方式
         goal_js = JointState.from_position(
-            torch.tensor([full_goal], dtype=torch.float32, device=self._device),
+            torch.as_tensor(full_goal[None, :], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
 
         # ---- 调用 cuRobo 规划 ----
-        # plan_joint 需要 goal 也是 JointState
-        result = self._planner.plan_single(goal_js, q_start)
+        if hasattr(self._planner, "plan_cspace"):
+            result = self._planner.plan_cspace(goal_state=goal_js, current_state=q_start)
+        elif hasattr(self._planner, "plan_single"):
+            result = self._planner.plan_single(goal_js, q_start)
+        else:
+            raise AttributeError("当前 cuRobo MotionPlanner 缺少 plan_cspace/plan_single 关节空间规划接口")
 
         if result is not None and result.success.any():
             interpolated = result.get_interpolated_plan()
@@ -491,6 +500,34 @@ class DualArmMotionPlanner:
     def apply_scene(self):
         """将场景构建器中的障碍物应用到规划器。"""
         self._planner.update_world(self._scene_builder.get_scene())
+
+    def _plan_to_pose_via_joint_goal(
+        self, arm: str, target_pose: Dict, current_joints: list
+    ) -> Dict:
+        from .ik_solver import DualArmIKSolver
+
+        if self._fallback_ik_solver is None:
+            self._fallback_ik_solver = DualArmIKSolver(
+                robot_config=self._robot_config_input,
+                self_collision_check=True,
+                accept_converged_without_feasible=True,
+                device=self._device,
+            )
+        ik = self._fallback_ik_solver
+        ik_result = ik.solve_left_arm(target_pose) if arm == "left" else ik.solve_right_arm(target_pose)
+        if not ik_result["success"]:
+            return {
+                "success": False,
+                "trajectory": None,
+                "duration": 0.0,
+                "n_waypoints": 0,
+                "error_message": ik_result["error_message"],
+            }
+        return self.plan_joint_to_joint(
+            arm=arm,
+            start_joints=current_joints,
+            goal_joints=ik_result["joint_angles"],
+        )
 
     # ================================================================
     # 内部方法

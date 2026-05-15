@@ -132,7 +132,8 @@ class MotionPlanningModule:
 
     def __init__(self, robot_config: str = "xtrainer.yml",
                  ik_num_seeds: int = 32,
-                 self_collision_check: bool = True):
+                 self_collision_check: bool = True,
+                 accept_converged_ik_without_feasible: bool = True):
         """
         初始化运动规划模块。
 
@@ -162,6 +163,7 @@ class MotionPlanningModule:
             robot_config=robot_config,
             num_seeds=ik_num_seeds,
             self_collision_check=self_collision_check,
+            accept_converged_without_feasible=accept_converged_ik_without_feasible,
         )
 
         # ---- 子模块 3：运动规划器 ----
@@ -241,10 +243,10 @@ class MotionPlanningModule:
 
         # ---- 步骤 c：运动规划 ----
         current = self._current_joints[arm]
-        plan_result = self._planner.plan_to_pose(
+        plan_result = self._planner.plan_joint_to_joint(
             arm=arm,
-            target_pose=target_pose,
-            current_joints=current,
+            start_joints=current,
+            goal_joints=target_joints,
         )
 
         if not plan_result["success"]:
@@ -355,11 +357,11 @@ class MotionPlanningModule:
                     error_message=f"阶段 [{wp.description}] IK 失败：{ik_result['error_message']}",
                 )
 
-            # 运动规划
-            plan_result = self._planner.plan_to_pose(
+            # 运动规划：IK 已给出目标关节，后续使用关节空间规划，避免 cuRobo 内部重复 IK。
+            plan_result = self._planner.plan_joint_to_joint(
                 arm=arm,
-                target_pose=segment_pose,
-                current_joints=current_joints,
+                start_joints=current_joints,
+                goal_joints=ik_result["joint_angles"],
             )
 
             if not plan_result["success"]:

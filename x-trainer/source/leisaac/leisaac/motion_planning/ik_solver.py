@@ -56,6 +56,7 @@ class DualArmIKSolver:
     def __init__(self, robot_config: str = "xtrainer.yml",
                  num_seeds: int = 32,
                  self_collision_check: bool = True,
+                 accept_converged_without_feasible: bool = False,
                  device: str = None):
         """
         初始化 IK 求解器。
@@ -69,6 +70,7 @@ class DualArmIKSolver:
             device: 计算设备，默认自动选择 ("cuda" 如果有 GPU，否则 "cpu")。
         """
         self.num_seeds = num_seeds
+        self._accept_converged_without_feasible = accept_converged_without_feasible
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         robot_config = build_curobo_robot_config(robot_config)
 
@@ -108,6 +110,7 @@ class DualArmIKSolver:
         print(f"  关节名: {self._joint_names}")
         print(f"  种子数: {num_seeds}")
         print(f"  自碰撞检测: {self_collision_check}")
+        print(f"  接受feasible=False但已收敛: {accept_converged_without_feasible}")
         print(
             f"  收敛阈值: pos≤{IK_POSITION_TOLERANCE_M*1000:.1f}mm, "
             f"rot≤{IK_ORIENTATION_TOLERANCE_RAD:.3f}rad"
@@ -410,10 +413,13 @@ class DualArmIKSolver:
         feasible = self._tensor_bool(getattr(result, "feasible", None), default=True)
         pos_error = self._tensor_item(result.position_error)
         rot_error = self._tensor_item(getattr(result, "rotation_error", None), default=0.0)
-        within_project_tolerance = (
-            feasible
-            and pos_error <= IK_POSITION_TOLERANCE_M
+        converged = (
+            pos_error <= IK_POSITION_TOLERANCE_M
             and rot_error <= IK_ORIENTATION_TOLERANCE_RAD
+        )
+        within_project_tolerance = (
+            converged
+            and (feasible or self._accept_converged_without_feasible)
         )
         return raw_success or within_project_tolerance
 

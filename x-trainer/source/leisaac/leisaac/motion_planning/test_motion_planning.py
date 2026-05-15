@@ -245,7 +245,11 @@ def test_ik_solver():
     # ---- 2.1 初始化 ----
     _sub("2.1 求解器初始化")
     total += 1
-    solver = DualArmIKSolver(robot_config="xtrainer.yml", num_seeds=32)
+    solver = DualArmIKSolver(
+        robot_config="xtrainer.yml",
+        num_seeds=32,
+        accept_converged_without_feasible=True,
+    )
     _ok("初始化 PASS")
     passed += 1
 
@@ -407,8 +411,23 @@ def test_motion_planner():
     _ok("关节限位合规 PASS")
     passed += 1
 
-    # ---- 3.6 plan_grasp 三阶段 ----
-    _sub("3.6 plan_grasp 三阶段抓取规划")
+    # ---- 3.6 关节空间规划 ----
+    _sub("3.6 plan_joint_to_joint 关节空间规划")
+    total += 1
+    result_j = planner.plan_joint_to_joint(
+        "left", start_joints=[0]*6, goal_joints=LEFT_TEST_JOINT_CANDIDATES[0]
+    )
+    if result_j["success"]:
+        _info(f"轨迹点: {result_j['n_waypoints']}")
+        _info(f"时长: {result_j['duration']:.2f}s")
+    else:
+        _info(f"关节空间规划失败: {result_j['error_message']}")
+    assert result_j["success"], f"关节空间规划失败: {result_j['error_message']}"
+    _ok("plan_joint_to_joint PASS")
+    passed += 1
+
+    # ---- 3.7 plan_grasp 三阶段 ----
+    _sub("3.7 plan_grasp 三阶段抓取规划")
     total += 1
     grasp_pose = _pose_from_fk(planner, LEFT_GRASP_JOINTS, "left")
     result_g = planner.plan_grasp(
