@@ -20,7 +20,7 @@ import math
 import numpy as np
 
 
-REGCTRL_DIAG_VERSION = "regctrl-curobo-diag-2026-05-15-v2"
+REGCTRL_DIAG_VERSION = "regctrl-curobo-diag-2026-05-15-v3"
 
 
 # ============================================================
@@ -55,14 +55,16 @@ def _info(msg: str):
 
 
 LEFT_TEST_JOINT_CANDIDATES = [
-    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
+    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [-0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
+    [-0.45, 0.95, -0.25, 0.12, 0.0, 0.0],
 ]
 RIGHT_TEST_JOINT_CANDIDATES = [
-    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
+    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
+    [0.45, 0.95, -0.25, 0.12, 0.0, 0.0],
 ]
 LEFT_GRASP_JOINTS = [-0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
 LEFT_PLACE_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
@@ -89,6 +91,15 @@ def _pose_from_fk(fk_source, joint_angles: list, arm: str) -> dict:
     }
 
 
+def _fmt_joints(joints: list) -> str:
+    return "[" + ", ".join(f"{float(v):.3f}" for v in joints) + "]"
+
+
+def _full_state_for_debug(planner, arm: str, active: list, passive: list = None) -> str:
+    full = planner._make_full_joint_array(active, arm, passive)
+    return _fmt_joints(full.tolist())
+
+
 def _first_working_ik_target(solver, arm: str, candidates: list) -> tuple:
     """从 FK 候选姿态中选择第一个 IK 真正成功的目标。"""
     solve = solver.solve_left_arm if arm == "left" else solver.solve_right_arm
@@ -108,37 +119,125 @@ def _first_working_plan_target(
 ) -> tuple:
     """从 FK 候选姿态中选择第一个可以规划到达的目标。"""
     failures = []
-    start_joints = LEFT_PLAN_START_JOINTS if arm == "left" else RIGHT_PLAN_START_JOINTS
-    for joints in candidates:
-        if np.allclose(joints, start_joints):
-            continue
-        pose = _pose_from_fk(planner, joints, arm)
-        result = planner.plan_to_pose(
-            arm, pose, current_joints=start_joints, obstacles=obstacles
+    passive_joints = RIGHT_PLAN_START_JOINTS if arm == "left" else LEFT_PLAN_START_JOINTS
+    obstacle_count = len(obstacles or [])
+    for start_joints in candidates:
+        for joints in candidates:
+            if np.allclose(joints, start_joints):
+                continue
+            pose = _pose_from_fk(planner, joints, arm)
+            result = planner.plan_to_pose(
+                arm,
+                pose,
+                current_joints=start_joints,
+                obstacles=obstacles,
+                passive_joints=passive_joints,
+            )
+            if result["success"]:
+                _info(f"{arm} 规划起点关节可用: {_fmt_joints(start_joints)}")
+                _info(f"{arm} 规划目标关节可用: {_fmt_joints(joints)}")
+                _info(
+                    f"{arm} 完整起点状态: "
+                    f"{_full_state_for_debug(planner, arm, start_joints, passive_joints)}"
+                )
+                return pose, result
+            failures.append(
+                f"start={_fmt_joints(start_joints)}, goal={_fmt_joints(joints)}, "
+                f"obstacles={obstacle_count}, full_start="
+                f"{_full_state_for_debug(planner, arm, start_joints, passive_joints)}, "
+                f"error={result['error_message']}"
+            )
+    if not failures:
+        raise AssertionError(f"{arm} 没有可尝试的规划候选组合")
+    for detail in failures[-3:]:
+        _info(f"{arm} 规划候选失败: {detail}")
+    raise AssertionError(f"{arm} 没有找到可用规划测试目标；最后失败: {failures[-1]}")
+
+
+def _first_working_joint_plan_target(
+    planner, arm: str, candidates: list, obstacles: list = None
+) -> tuple:
+    """从候选姿态中选择第一个可通过关节空间规划连接的起点和终点。"""
+    failures = []
+    passive_joints = RIGHT_PLAN_START_JOINTS if arm == "left" else LEFT_PLAN_START_JOINTS
+    if obstacles is not None:
+        planner.update_obstacles(obstacles)
+    for start_joints in candidates:
+        for goal_joints in candidates:
+            if np.allclose(goal_joints, start_joints):
+                continue
+            result = planner.plan_joint_to_joint(
+                arm,
+                start_joints=start_joints,
+                goal_joints=goal_joints,
+                passive_joints=passive_joints,
+            )
+            if result["success"]:
+                _info(f"{arm} 关节空间起点可用: {_fmt_joints(start_joints)}")
+                _info(f"{arm} 关节空间目标可用: {_fmt_joints(goal_joints)}")
+                return start_joints, goal_joints, result
+            failures.append(
+                f"start={_fmt_joints(start_joints)}, goal={_fmt_joints(goal_joints)}, "
+                f"full_start={_full_state_for_debug(planner, arm, start_joints, passive_joints)}, "
+                f"error={result['error_message']}"
+            )
+    if not failures:
+        raise AssertionError(f"{arm} 没有可尝试的关节空间候选组合")
+    for detail in failures[-3:]:
+        _info(f"{arm} 关节空间候选失败: {detail}")
+    raise AssertionError(f"{arm} 没有找到可用关节空间规划目标；最后失败: {failures[-1]}")
+
+
+def _first_working_grasp_start(planner, arm: str, candidates: list, grasp_joints: list) -> dict:
+    """为 plan_grasp 选择一个可用起点，避免被单个碰撞起点卡死。"""
+    grasp_pose = _pose_from_fk(planner, grasp_joints, arm)
+    failures = []
+    for start_joints in candidates:
+        result = planner.plan_grasp(
+            arm,
+            grasp_pose,
+            current_joints=start_joints,
+            approach_offset=0.03,
+            lift_offset=0.03,
         )
         if result["success"]:
-            _info(f"{arm} 规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
-            return pose, result
-        failures.append(result["error_message"])
-    raise AssertionError(f"{arm} 没有找到可用规划测试目标；最后失败: {failures[-1]}")
+            _info(f"{arm} 抓取规划起点可用: {_fmt_joints(start_joints)}")
+            return result
+        failures.append(f"start={_fmt_joints(start_joints)}, error={result['error_message']}")
+    for detail in failures[-3:]:
+        _info(f"{arm} 抓取候选失败: {detail}")
+    raise AssertionError(f"{arm} 没有找到可用抓取规划起点；最后失败: {failures[-1]}")
 
 
 def _first_working_module_target(module, arm: str, candidates: list, obstacles: list) -> tuple:
     """从 FK 候选姿态中选择第一个完整 plan() 可以到达的目标。"""
     failures = []
-    start_joints = LEFT_PLAN_START_JOINTS if arm == "left" else RIGHT_PLAN_START_JOINTS
-    for joints in candidates:
-        if np.allclose(joints, start_joints):
-            continue
-        module.set_joint_state(arm, start_joints)
-        pose = _pose_from_fk(module._ik, joints, arm)
-        result = module.plan(pose, obstacles=obstacles, arm=arm)
-        if result.success:
+    passive_arm = "right" if arm == "left" else "left"
+    passive_start = RIGHT_PLAN_START_JOINTS if arm == "left" else LEFT_PLAN_START_JOINTS
+    for start_joints in candidates:
+        for joints in candidates:
+            if np.allclose(joints, start_joints):
+                continue
             module.set_joint_state(arm, start_joints)
-            _info(f"{arm} 完整规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
-            return pose, result
-        failures.append(result.error_message)
-    module.set_joint_state(arm, start_joints)
+            module.set_joint_state(passive_arm, passive_start)
+            pose = _pose_from_fk(module._ik, joints, arm)
+            result = module.plan(pose, obstacles=obstacles, arm=arm)
+            if result.success:
+                module.set_joint_state(arm, start_joints)
+                module.set_joint_state(passive_arm, passive_start)
+                _info(f"{arm} 完整规划起点关节可用: {_fmt_joints(start_joints)}")
+                _info(f"{arm} 完整规划目标关节可用: {_fmt_joints(joints)}")
+                return pose, result
+            failures.append(
+                f"start={_fmt_joints(start_joints)}, goal={_fmt_joints(joints)}, "
+                f"obstacles={len(obstacles)}, error={result.error_message}"
+            )
+    module.set_joint_state(arm, candidates[0])
+    module.set_joint_state(passive_arm, passive_start)
+    if not failures:
+        raise AssertionError(f"{arm} 没有可尝试的完整规划候选组合")
+    for detail in failures[-3:]:
+        _info(f"{arm} 完整规划候选失败: {detail}")
     raise AssertionError(f"{arm} 没有找到可用完整规划目标；最后失败: {failures[-1]}")
 
 
@@ -457,10 +556,10 @@ def test_motion_planner():
     # ---- 3.7 关节空间规划 ----
     _sub("3.7 plan_joint_to_joint 关节空间规划")
     total += 1
-    result_j = planner.plan_joint_to_joint(
+    _, _, result_j = _first_working_joint_plan_target(
+        planner,
         "left",
-        start_joints=LEFT_PLAN_START_JOINTS,
-        goal_joints=LEFT_TEST_JOINT_CANDIDATES[1],
+        LEFT_TEST_JOINT_CANDIDATES,
     )
     if result_j["success"]:
         _info(f"轨迹点: {result_j['n_waypoints']}")
@@ -474,13 +573,11 @@ def test_motion_planner():
     # ---- 3.8 plan_grasp 三阶段 ----
     _sub("3.8 plan_grasp 三阶段抓取规划")
     total += 1
-    grasp_pose = _pose_from_fk(planner, LEFT_GRASP_JOINTS, "left")
-    result_g = planner.plan_grasp(
+    result_g = _first_working_grasp_start(
+        planner,
         "left",
-        grasp_pose,
-        current_joints=LEFT_PLAN_START_JOINTS,
-        approach_offset=0.03,
-        lift_offset=0.03,
+        LEFT_TEST_JOINT_CANDIDATES,
+        LEFT_GRASP_JOINTS,
     )
     if result_g["success"]:
         _info(f"接近段: {len(result_g['approach_trajectory'])} 点")

@@ -33,6 +33,12 @@ JOINT_LIMITS_LOWER = np.full(6, -np.pi, dtype=np.float32)  # 下限 -3.14159
 JOINT_LIMITS_UPPER = np.full(6,  np.pi, dtype=np.float32)  # 上限  3.14159
 IK_POSITION_TOLERANCE_M = 0.002     # 2mm，适合小型 X-Trainer 机械臂测试
 IK_ORIENTATION_TOLERANCE_RAD = 0.10 # 约 5.7 度
+DEFAULT_LEFT_PARK_JOINTS = np.array(
+    [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
+)
+DEFAULT_RIGHT_PARK_JOINTS = np.array(
+    [0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
+)
 
 
 # ============================================================
@@ -314,9 +320,11 @@ class DualArmIKSolver:
                 "quaternion": [qw, qx, qy, qz],
             }
         """
-        # 构造完整的 12 关节状态张量
-        # cspace 顺序: [J1_1~J1_6, J2_1~J2_6]
-        full = np.zeros(12, dtype=np.float32)
+        # 构造完整的 12 关节状态张量。另一只手也要放到规划器一致的停放姿态，
+        # 否则 FK 生成的目标会和运动规划阶段使用的整机姿态不一致。
+        full = np.concatenate(
+            (DEFAULT_LEFT_PARK_JOINTS, DEFAULT_RIGHT_PARK_JOINTS)
+        ).astype(np.float32)
         if arm == "left":
             full[:6] = joint_angles
             target_frame = self._left_frame
@@ -342,12 +350,13 @@ class DualArmIKSolver:
         }
 
     def _compute_home_tool_poses(self) -> Dict[str, Pose]:
-        """Compute both tool-frame poses at the zero joint configuration."""
-        home_joints = torch.zeros(
-            (1, len(self._joint_names)), dtype=torch.float32, device=self._device
-        )
+        """Compute both tool-frame poses at the shared parked configuration."""
+        home_joints = np.concatenate(
+            (DEFAULT_LEFT_PARK_JOINTS, DEFAULT_RIGHT_PARK_JOINTS)
+        ).astype(np.float32)
         home_state = JointState.from_position(
-            home_joints, joint_names=self._joint_names
+            torch.as_tensor(home_joints[None, :], dtype=torch.float32, device=self._device),
+            joint_names=self._joint_names,
         )
         return self._ik.compute_kinematics(home_state).tool_poses.to_dict()
 

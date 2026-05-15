@@ -30,10 +30,10 @@ _DEFAULT_COLLISION_CACHE = {"cuboid": 32}
 MOTION_POSITION_TOLERANCE_M = 0.002
 MOTION_ORIENTATION_TOLERANCE_RAD = 0.10
 DEFAULT_LEFT_PARK_JOINTS = np.array(
-    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0], dtype=np.float32
+    [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
 )
 DEFAULT_RIGHT_PARK_JOINTS = np.array(
-    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0], dtype=np.float32
+    [0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
 )
 
 
@@ -238,7 +238,8 @@ class DualArmMotionPlanner:
 
     def plan_to_pose(self, arm: str, target_pose: Dict,
                      current_joints: list,
-                     obstacles: Optional[List[Dict]] = None) -> Dict:
+                     obstacles: Optional[List[Dict]] = None,
+                     passive_joints: Optional[list] = None) -> Dict:
         """
         单臂规划：从当前关节角度到目标末端位姿，生成无碰撞轨迹。
 
@@ -261,18 +262,16 @@ class DualArmMotionPlanner:
         # 确定目标 tool frame
         target_frame = self._get_target_frame(arm)
 
-        # 如果有临时障碍物，先更新场景
+        # 如果有临时障碍物，先更新场景。这里使用 update_obstacles() 清空旧场景，
+        # 避免多次试探候选目标时把同一批障碍物重复加入世界模型。
         if obstacles:
-            for obs in obstacles:
-                self._scene_builder.add_box(
-                    obs["name"], obs["position"], obs["dimensions"]
-                )
-            self._planner.update_world(self._scene_builder.get_scene())
+            self.update_obstacles(obstacles)
 
         # 构造起始关节状态
-        q_start = self._make_joint_state(current_joints, arm)
+        q_start = self._make_joint_state(current_joints, arm, passive_joints)
 
-        # 构造目标位姿（cuRobo 需要 5D 张量）
+        # 构造目标位姿。GoalToolPose.from_poses() 接收每个 Pose 的 2D batch 张量，
+        # 然后在内部组装成 cuRobo 需要的 5D 目标张量。
         goal = self._make_goal_pose(target_frame, target_pose)
 
         # ---- 调用 cuRobo 规划 ----
@@ -297,7 +296,9 @@ class DualArmMotionPlanner:
 
         # plan_pose 会在 cuRobo 内部重新做 IK；当该 IK 因 feasible=False 拒绝
         # 已收敛目标时，回退到项目 IK + 关节空间规划，保留轨迹碰撞校验。
-        fallback = self._plan_to_pose_via_joint_goal(arm, target_pose, current_joints)
+        fallback = self._plan_to_pose_via_joint_goal(
+            arm, target_pose, current_joints, passive_joints
+        )
         if fallback["success"]:
             return fallback
 
@@ -513,7 +514,11 @@ class DualArmMotionPlanner:
         self._planner.update_world(self._scene_builder.get_scene())
 
     def _plan_to_pose_via_joint_goal(
-        self, arm: str, target_pose: Dict, current_joints: list
+        self,
+        arm: str,
+        target_pose: Dict,
+        current_joints: list,
+        passive_joints: Optional[list] = None,
     ) -> Dict:
         from .ik_solver import DualArmIKSolver
 
@@ -538,6 +543,7 @@ class DualArmMotionPlanner:
             arm=arm,
             start_joints=current_joints,
             goal_joints=ik_result["joint_angles"],
+            passive_joints=passive_joints,
         )
 
     # ================================================================
@@ -668,9 +674,16 @@ class DualArmMotionPlanner:
             [target_pose["quaternion"]], dtype=torch.float32, device=self._device
         )
         goal_dict = self._make_single_arm_goal_dict(target_frame, pos, quat)
-        return GoalToolPose.from_poses(
+        goal = GoalToolPose.from_poses(
             goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
         )
+        if goal.position.ndim != 5 or goal.quaternion.ndim != 5:
+            raise ValueError(
+                "GoalToolPose shape error: "
+                f"position={tuple(goal.position.shape)}, "
+                f"quaternion={tuple(goal.quaternion.shape)}"
+            )
+        return goal
 
     def _compute_home_tool_poses(self) -> Dict[str, Pose]:
         full = np.concatenate(
@@ -770,7 +783,9 @@ def test_motion_planner():
         "position": [0.3, -0.15, 0.25],
         "quaternion": [1.0, 0.0, 0.0, 0.0],
     }
-    result_l = planner.plan_to_pose("left", left_target, current_joints=[0]*6)
+    result_l = planner.plan_to_pose(
+        "left", left_target, current_joints=DEFAULT_LEFT_PARK_JOINTS.tolist()
+    )
     passed = result_l["success"]
     all_pass = all_pass and passed
     if passed:
@@ -787,7 +802,9 @@ def test_motion_planner():
         "position": [0.3, 0.15, 0.25],
         "quaternion": [1.0, 0.0, 0.0, 0.0],
     }
-    result_r = planner.plan_to_pose("right", right_target, current_joints=[0]*6)
+    result_r = planner.plan_to_pose(
+        "right", right_target, current_joints=DEFAULT_RIGHT_PARK_JOINTS.tolist()
+    )
     passed = result_r["success"]
     all_pass = all_pass and passed
     if passed:
@@ -804,7 +821,7 @@ def test_motion_planner():
         "quaternion": [1.0, 0.0, 0.0, 0.0],
     }
     result_g = planner.plan_grasp(
-        "left", grasp_pose, current_joints=[0]*6,
+        "left", grasp_pose, current_joints=DEFAULT_LEFT_PARK_JOINTS.tolist(),
         approach_offset=0.1, lift_offset=0.1,
     )
     passed = result_g["success"]
@@ -826,7 +843,9 @@ def test_motion_planner():
     ]
     planner.update_obstacles(new_obstacles)
     # 再次规划，验证更新后的场景
-    result_u = planner.plan_to_pose("left", left_target, current_joints=[0]*6)
+    result_u = planner.plan_to_pose(
+        "left", left_target, current_joints=DEFAULT_LEFT_PARK_JOINTS.tolist()
+    )
     passed = result_u["success"]
     all_pass = all_pass and passed
     if passed:
