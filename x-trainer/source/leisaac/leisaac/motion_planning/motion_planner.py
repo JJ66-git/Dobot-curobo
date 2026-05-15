@@ -363,12 +363,17 @@ class DualArmMotionPlanner:
                 "error_message": "",
             }
         else:
+            debug_info = getattr(result, "debug_info", "") if result is not None else ""
+            detail = f"；调试信息: {debug_info}" if debug_info else ""
             return {
                 "success": False,
                 "trajectory": None,
                 "duration": 0.0,
                 "n_waypoints": 0,
-                "error_message": f"{arm}臂关节空间规划失败，路径可能与障碍物冲突",
+                "error_message": (
+                    f"{arm}臂关节空间规划失败，起点或终点可能已在碰撞中，"
+                    f"也可能路径与障碍物冲突{detail}"
+                ),
             }
 
     # ================================================================

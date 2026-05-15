@@ -20,6 +20,9 @@ import math
 import numpy as np
 
 
+REGCTRL_DIAG_VERSION = "regctrl-curobo-diag-2026-05-15-v2"
+
+
 # ============================================================
 # 辅助函数
 # ============================================================
@@ -64,6 +67,13 @@ RIGHT_TEST_JOINT_CANDIDATES = [
 LEFT_GRASP_JOINTS = [-0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
 LEFT_PLACE_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
 RIGHT_GRASP_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
+LEFT_PLAN_START_JOINTS = LEFT_TEST_JOINT_CANDIDATES[0]
+RIGHT_PLAN_START_JOINTS = RIGHT_TEST_JOINT_CANDIDATES[0]
+SAFE_TABLE_OBSTACLE = {
+    "name": "桌子",
+    "position": [0.55, 0.0, 0.02],
+    "dimensions": [0.50, 0.60, 0.03],
+}
 
 
 def _pose_from_fk(fk_source, joint_angles: list, arm: str) -> dict:
@@ -98,10 +108,13 @@ def _first_working_plan_target(
 ) -> tuple:
     """从 FK 候选姿态中选择第一个可以规划到达的目标。"""
     failures = []
+    start_joints = LEFT_PLAN_START_JOINTS if arm == "left" else RIGHT_PLAN_START_JOINTS
     for joints in candidates:
+        if np.allclose(joints, start_joints):
+            continue
         pose = _pose_from_fk(planner, joints, arm)
         result = planner.plan_to_pose(
-            arm, pose, current_joints=[0]*6, obstacles=obstacles
+            arm, pose, current_joints=start_joints, obstacles=obstacles
         )
         if result["success"]:
             _info(f"{arm} 规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
@@ -113,16 +126,19 @@ def _first_working_plan_target(
 def _first_working_module_target(module, arm: str, candidates: list, obstacles: list) -> tuple:
     """从 FK 候选姿态中选择第一个完整 plan() 可以到达的目标。"""
     failures = []
+    start_joints = LEFT_PLAN_START_JOINTS if arm == "left" else RIGHT_PLAN_START_JOINTS
     for joints in candidates:
-        module.set_joint_state(arm, [0.0] * 6)
+        if np.allclose(joints, start_joints):
+            continue
+        module.set_joint_state(arm, start_joints)
         pose = _pose_from_fk(module._ik, joints, arm)
         result = module.plan(pose, obstacles=obstacles, arm=arm)
         if result.success:
-            module.set_joint_state(arm, [0.0] * 6)
+            module.set_joint_state(arm, start_joints)
             _info(f"{arm} 完整规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
             return pose, result
         failures.append(result.error_message)
-    module.set_joint_state(arm, [0.0] * 6)
+    module.set_joint_state(arm, start_joints)
     raise AssertionError(f"{arm} 没有找到可用完整规划目标；最后失败: {failures[-1]}")
 
 
@@ -352,7 +368,11 @@ def test_motion_planner():
     total += 1
     planner = DualArmMotionPlanner(robot_config="xtrainer.yml")
     builder = planner.get_scene_builder()
-    builder.add_table("桌子", [0.4, 0, 0.15], [0.8, 0.6, 0.03])
+    builder.add_table(
+        SAFE_TABLE_OBSTACLE["name"],
+        SAFE_TABLE_OBSTACLE["position"],
+        SAFE_TABLE_OBSTACLE["dimensions"],
+    )
     builder.add_box("障碍盒", [0.3, 0.1, 0.25], [0.05, 0.05, 0.1])
     planner.apply_scene()
     planner.warmup()
@@ -415,7 +435,9 @@ def test_motion_planner():
     _sub("3.6 plan_joint_to_joint 关节空间规划")
     total += 1
     result_j = planner.plan_joint_to_joint(
-        "left", start_joints=[0]*6, goal_joints=LEFT_TEST_JOINT_CANDIDATES[0]
+        "left",
+        start_joints=LEFT_PLAN_START_JOINTS,
+        goal_joints=LEFT_TEST_JOINT_CANDIDATES[1],
     )
     if result_j["success"]:
         _info(f"轨迹点: {result_j['n_waypoints']}")
@@ -431,7 +453,11 @@ def test_motion_planner():
     total += 1
     grasp_pose = _pose_from_fk(planner, LEFT_GRASP_JOINTS, "left")
     result_g = planner.plan_grasp(
-        "left", grasp_pose, current_joints=[0]*6, approach_offset=0.03, lift_offset=0.03
+        "left",
+        grasp_pose,
+        current_joints=LEFT_PLAN_START_JOINTS,
+        approach_offset=0.03,
+        lift_offset=0.03,
     )
     if result_g["success"]:
         _info(f"接近段: {len(result_g['approach_trajectory'])} 点")
@@ -610,7 +636,7 @@ def test_full_pipeline():
     _sub("5.2 设置比赛场景")
     total += 1
     obstacles = [
-        {"name": "桌子", "position": [0.4, 0, 0.15], "dimensions": [0.8, 0.6, 0.03]},
+        SAFE_TABLE_OBSTACLE,
         {"name": "左挡板", "position": [0, -0.4, 0.3], "dimensions": [1.0, 0.02, 0.6]},
         {"name": "右挡板", "position": [0, 0.4, 0.3], "dimensions": [1.0, 0.02, 0.6]},
         {"name": "前挡板", "position": [0.7, 0, 0.3], "dimensions": [0.02, 0.8, 0.6]},
@@ -728,6 +754,7 @@ def run_all_tests():
     """
     print("\n" + "#" * 60)
     print("  运动规划模块 —— 全量测试")
+    print(f"  规控诊断版本: {REGCTRL_DIAG_VERSION}")
     print("#" * 60)
 
     results = {}
