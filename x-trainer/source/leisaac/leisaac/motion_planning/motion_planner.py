@@ -20,7 +20,7 @@ import numpy as np
 from typing import Dict, List, Optional
 
 from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
-from curobo.types import JointState, GoalToolPose
+from curobo.types import JointState, Pose, GoalToolPose
 from curobo.scene import Cuboid, Scene
 from .curobo_config import build_curobo_robot_config
 
@@ -193,6 +193,7 @@ class DualArmMotionPlanner:
 
         # 插值时间步长（从 cuRobo 配置中读取）
         self._interp_dt = self._planner.trajopt_solver.config.interpolation_dt
+        self._home_tool_poses = self._compute_home_tool_poses()
 
         print(f"[运动规划器] 初始化完成")
         print(f"  关节: {self._joint_names}")
@@ -521,7 +522,7 @@ class DualArmMotionPlanner:
         full = np.zeros(12, dtype=np.float32)
         full[:6] = joints  # 左臂先填，实际规划时 cuRobo 会按 tool_frame 选取
         return JointState.from_position(
-            torch.tensor([full], dtype=torch.float32, device=self._device),
+            torch.as_tensor([full], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
 
@@ -531,18 +532,44 @@ class DualArmMotionPlanner:
         target_pose: {"position": [x,y,z], "quaternion": [qw,qx,qy,qz]}
         """
         pos = torch.tensor(
-            [[[[target_pose["position"]]]]],
-            dtype=torch.float32, device=self._device,
-        )  # shape = (1, 1, 1, 1, 3)
-        quat = torch.tensor(
-            [[[[target_pose["quaternion"]]]]],
-            dtype=torch.float32, device=self._device,
-        )  # shape = (1, 1, 1, 1, 4)
-        return GoalToolPose(
-            tool_frames=[target_frame],
-            position=pos,
-            quaternion=quat,
+            [target_pose["position"]], dtype=torch.float32, device=self._device
         )
+        quat = torch.tensor(
+            [target_pose["quaternion"]], dtype=torch.float32, device=self._device
+        )
+        goal_dict = self._make_single_arm_goal_dict(target_frame, pos, quat)
+        return GoalToolPose.from_poses(
+            goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
+        )
+
+    def _compute_home_tool_poses(self) -> Dict[str, Pose]:
+        home_state = JointState.from_position(
+            torch.zeros(
+                (1, len(self._joint_names)), dtype=torch.float32, device=self._device
+            ),
+            joint_names=self._joint_names,
+        )
+        return self._planner.compute_kinematics(home_state).tool_poses.to_dict()
+
+    def _make_single_arm_goal_dict(
+        self, target_frame: str, position: torch.Tensor, quaternion: torch.Tensor
+    ) -> Dict[str, Pose]:
+        goal_dict = {
+            frame: Pose(
+                position=pose.position.clone(),
+                quaternion=pose.quaternion.clone(),
+                name=frame,
+                normalize_rotation=False,
+            )
+            for frame, pose in self._home_tool_poses.items()
+        }
+        goal_dict[target_frame] = Pose(
+            position=position,
+            quaternion=quaternion,
+            name=target_frame,
+            normalize_rotation=False,
+        )
+        return goal_dict
 
     def _extract_trajectory(self, curobo_traj, joint_indices: list) -> Optional[list]:
         """

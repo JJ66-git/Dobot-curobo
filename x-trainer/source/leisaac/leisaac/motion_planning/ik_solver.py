@@ -196,7 +196,7 @@ class DualArmIKSolver:
         # ---- 解析结果 ----
         success = result.success.item()
         pos_error = result.position_error.item()          # 单位：米
-        joint_full = result.js_solution.squeeze().cpu().numpy()  # (12,)
+        joint_full = self._joint_solution_to_numpy(result)
 
         # 拆分左右臂各 6 个关节
         left_joints = joint_full[:6].tolist()
@@ -349,6 +349,10 @@ class DualArmIKSolver:
         )
         return goal_dict
 
+    @staticmethod
+    def _joint_solution_to_numpy(result) -> np.ndarray:
+        return result.js_solution.position.squeeze().detach().cpu().numpy().reshape(-1)
+
     # ================================================================
     # 内部方法：单臂求解
     # ================================================================
@@ -392,7 +396,7 @@ class DualArmIKSolver:
         success = result.success.item()
         pos_error_m = result.position_error.item()                     # 米
         pos_error_mm = round(pos_error_m * 1000, 3)                    # 毫米
-        joint_full = result.js_solution.squeeze().cpu().numpy()        # (12,)
+        joint_full = self._joint_solution_to_numpy(result)
 
         # 提取目标臂的 6 个关节
         if arm_label == "左臂":
