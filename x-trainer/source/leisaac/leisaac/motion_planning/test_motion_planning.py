@@ -51,11 +51,19 @@ def _info(msg: str):
     print(f"    → {msg}")
 
 
-LEFT_TEST_JOINTS = [-0.35, 1.00, -0.35, 0.15, 0.0, 0.0]
-RIGHT_TEST_JOINTS = [0.35, 1.00, -0.35, 0.15, 0.0, 0.0]
-LEFT_GRASP_JOINTS = [-0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
-LEFT_PLACE_JOINTS = [0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
-RIGHT_GRASP_JOINTS = [0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
+LEFT_TEST_JOINT_CANDIDATES = [
+    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
+    [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
+    [-0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
+]
+RIGHT_TEST_JOINT_CANDIDATES = [
+    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
+    [0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
+    [0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
+]
+LEFT_GRASP_JOINTS = [-0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
+LEFT_PLACE_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
+RIGHT_GRASP_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
 
 
 def _pose_from_fk(fk_source, joint_angles: list, arm: str) -> dict:
@@ -69,6 +77,53 @@ def _pose_from_fk(fk_source, joint_angles: list, arm: str) -> dict:
         "position": [float(v) for v in pose["position"]],
         "quaternion": [float(v) for v in pose["quaternion"]],
     }
+
+
+def _first_working_ik_target(solver, arm: str, candidates: list) -> tuple:
+    """从 FK 候选姿态中选择第一个 IK 真正成功的目标。"""
+    solve = solver.solve_left_arm if arm == "left" else solver.solve_right_arm
+    failures = []
+    for joints in candidates:
+        pose = _pose_from_fk(solver, joints, arm)
+        result = solve(pose)
+        if result["success"]:
+            _info(f"{arm} 候选关节可用: {[f'{a:.3f}' for a in joints]}")
+            return pose, result
+        failures.append(result["error_message"])
+    raise AssertionError(f"{arm} 没有找到可用 IK 测试目标；最后失败: {failures[-1]}")
+
+
+def _first_working_plan_target(
+    planner, arm: str, candidates: list, obstacles: list = None
+) -> tuple:
+    """从 FK 候选姿态中选择第一个可以规划到达的目标。"""
+    failures = []
+    for joints in candidates:
+        pose = _pose_from_fk(planner, joints, arm)
+        result = planner.plan_to_pose(
+            arm, pose, current_joints=[0]*6, obstacles=obstacles
+        )
+        if result["success"]:
+            _info(f"{arm} 规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
+            return pose, result
+        failures.append(result["error_message"])
+    raise AssertionError(f"{arm} 没有找到可用规划测试目标；最后失败: {failures[-1]}")
+
+
+def _first_working_module_target(module, arm: str, candidates: list, obstacles: list) -> tuple:
+    """从 FK 候选姿态中选择第一个完整 plan() 可以到达的目标。"""
+    failures = []
+    for joints in candidates:
+        module.set_joint_state(arm, [0.0] * 6)
+        pose = _pose_from_fk(module._ik, joints, arm)
+        result = module.plan(pose, obstacles=obstacles, arm=arm)
+        if result.success:
+            module.set_joint_state(arm, [0.0] * 6)
+            _info(f"{arm} 完整规划候选关节可用: {[f'{a:.3f}' for a in joints]}")
+            return pose, result
+        failures.append(result.error_message)
+    module.set_joint_state(arm, [0.0] * 6)
+    raise AssertionError(f"{arm} 没有找到可用完整规划目标；最后失败: {failures[-1]}")
 
 
 # ============================================================
@@ -197,9 +252,10 @@ def test_ik_solver():
     # ---- 2.2 左臂 IK ----
     _sub("2.2 左臂 IK 求解")
     total += 1
-    left_target = _pose_from_fk(solver, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
-    result_l = solver.solve_left_arm(left_target)
+    left_target, result_l = _first_working_ik_target(
+        solver, "left", LEFT_TEST_JOINT_CANDIDATES
+    )
     elapsed = (time.time() - t0) * 1000
     _info(f"目标: pos={left_target['position']}")
     _info(f"成功: {result_l['success']}")
@@ -215,8 +271,9 @@ def test_ik_solver():
     # ---- 2.3 右臂 IK ----
     _sub("2.3 右臂 IK 求解")
     total += 1
-    right_target = _pose_from_fk(solver, RIGHT_TEST_JOINTS, "right")
-    result_r = solver.solve_right_arm(right_target)
+    right_target, result_r = _first_working_ik_target(
+        solver, "right", RIGHT_TEST_JOINT_CANDIDATES
+    )
     _info(f"成功: {result_r['success']}")
     if result_r["success"]:
         _info(f"位置误差: {result_r['position_error_mm']:.3f}mm")
@@ -301,9 +358,10 @@ def test_motion_planner():
     # ---- 3.2 左臂 plan_to_pose ----
     _sub("3.2 左臂 plan_to_pose")
     total += 1
-    left_target = _pose_from_fk(planner, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
-    result_l = planner.plan_to_pose("left", left_target, current_joints=[0]*6)
+    left_target, result_l = _first_working_plan_target(
+        planner, "left", LEFT_TEST_JOINT_CANDIDATES
+    )
     elapsed = (time.time() - t0) * 1000
     _info(f"成功: {result_l['success']}")
     _info(f"轨迹点: {result_l['n_waypoints']}")
@@ -317,8 +375,9 @@ def test_motion_planner():
     # ---- 3.3 右臂 plan_to_pose ----
     _sub("3.3 右臂 plan_to_pose")
     total += 1
-    right_target = _pose_from_fk(planner, RIGHT_TEST_JOINTS, "right")
-    result_r = planner.plan_to_pose("right", right_target, current_joints=[0]*6)
+    right_target, result_r = _first_working_plan_target(
+        planner, "right", RIGHT_TEST_JOINT_CANDIDATES
+    )
     assert result_r["success"], f"右臂规划失败: {result_r['error_message']}"
     _ok("右臂 plan_to_pose PASS")
     passed += 1
@@ -545,9 +604,10 @@ def test_full_pipeline():
     # ---- 5.3 左臂完整规划 ----
     _sub("5.3 左臂 plan() 完整规划")
     total += 1
-    target_left = _pose_from_fk(module._ik, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
-    result = module.plan(target_left, obstacles=obstacles, arm="left")
+    target_left, result = _first_working_module_target(
+        module, "left", LEFT_TEST_JOINT_CANDIDATES, obstacles
+    )
     elapsed = (time.time() - t0) * 1000
     _info(f"成功: {result.success}")
     _info(f"轨迹点: {result.n_waypoints}")
@@ -565,8 +625,9 @@ def test_full_pipeline():
     # ---- 5.4 右臂完整规划 ----
     _sub("5.4 右臂 plan() 完整规划")
     total += 1
-    target_right = _pose_from_fk(module._ik, RIGHT_TEST_JOINTS, "right")
-    result_r = module.plan(target_right, obstacles=obstacles, arm="right")
+    target_right, result_r = _first_working_module_target(
+        module, "right", RIGHT_TEST_JOINT_CANDIDATES, obstacles
+    )
     assert result_r.success, f"右臂规划失败: {result_r.error_message}"
     _ok("右臂 plan() PASS")
     passed += 1

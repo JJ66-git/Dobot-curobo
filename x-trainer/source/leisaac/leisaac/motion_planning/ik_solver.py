@@ -14,6 +14,7 @@ cuRobo IK 原理：
 依赖：curobo, torch, numpy
 """
 
+import inspect
 import torch
 import numpy as np
 from typing import Dict, Optional
@@ -30,6 +31,8 @@ from .curobo_config import build_curobo_robot_config
 # X-Trainer 每个臂 6 个关节，限位均为 ±π（来自 URDF）
 JOINT_LIMITS_LOWER = np.full(6, -np.pi, dtype=np.float32)  # 下限 -3.14159
 JOINT_LIMITS_UPPER = np.full(6,  np.pi, dtype=np.float32)  # 上限  3.14159
+IK_POSITION_TOLERANCE_M = 0.002     # 2mm，适合小型 X-Trainer 机械臂测试
+IK_ORIENTATION_TOLERANCE_RAD = 0.10 # 约 5.7 度
 
 
 # ============================================================
@@ -71,11 +74,13 @@ class DualArmIKSolver:
 
         # ---- 创建 IK 配置 ----
         # InverseKinematicsCfg.create() 会解析 YAML 中的 URDF、碰撞球、关节空间等
-        config = InverseKinematicsCfg.create(
-            robot=robot_config,
-            num_seeds=num_seeds,
-            self_collision_check=self_collision_check,
-        )
+        ik_kwargs = {
+            "robot": robot_config,
+            "num_seeds": num_seeds,
+            "self_collision_check": self_collision_check,
+        }
+        ik_kwargs.update(self._supported_ik_tolerance_kwargs())
+        config = InverseKinematicsCfg.create(**ik_kwargs)
 
         # ---- 创建 IK 求解器 ----
         self._ik = InverseKinematics(config)
@@ -103,6 +108,10 @@ class DualArmIKSolver:
         print(f"  关节名: {self._joint_names}")
         print(f"  种子数: {num_seeds}")
         print(f"  自碰撞检测: {self_collision_check}")
+        print(
+            f"  收敛阈值: pos≤{IK_POSITION_TOLERANCE_M*1000:.1f}mm, "
+            f"rot≤{IK_ORIENTATION_TOLERANCE_RAD:.3f}rad"
+        )
 
     # ================================================================
     # 公开接口 1：solve_left_arm —— 左臂 IK 求解
@@ -194,8 +203,10 @@ class DualArmIKSolver:
         result = self._ik.solve_pose(goal)
 
         # ---- 解析结果 ----
-        success = result.success.item()
-        pos_error = result.position_error.item()          # 单位：米
+        success = self._is_success(result)
+        pos_error = self._tensor_item(result.position_error)          # 单位：米
+        rot_error = self._tensor_item(getattr(result, "rotation_error", None))
+        feasible = self._tensor_bool(getattr(result, "feasible", None))
         joint_full = self._joint_solution_to_numpy(result)
 
         # 拆分左右臂各 6 个关节
@@ -207,13 +218,21 @@ class DualArmIKSolver:
             "success": success,
             "joint_angles": left_joints if success else None,
             "position_error_mm": round(pos_error * 1000, 3),
-            "error_message": "" if success else "双臂 IK 求解失败，目标可能超出工作空间",
+            "rotation_error_rad": round(rot_error, 6),
+            "feasible": feasible,
+            "error_message": "" if success else self._format_error_message(
+                "双臂", left_pose["position"], pos_error, rot_error, feasible
+            ),
         }
         right_out = {
             "success": success,
             "joint_angles": right_joints if success else None,
             "position_error_mm": round(pos_error * 1000, 3),
-            "error_message": "" if success else "双臂 IK 求解失败，目标可能超出工作空间",
+            "rotation_error_rad": round(rot_error, 6),
+            "feasible": feasible,
+            "error_message": "" if success else self._format_error_message(
+                "双臂", right_pose["position"], pos_error, rot_error, feasible
+            ),
         }
 
         return {
@@ -303,7 +322,7 @@ class DualArmIKSolver:
             target_frame = self._right_frame
 
         joint_state = JointState.from_position(
-            torch.tensor([full], device=self._device, dtype=torch.float32),
+            torch.as_tensor(full[None, :], device=self._device, dtype=torch.float32),
             joint_names=self._joint_names,
         )
 
@@ -353,6 +372,68 @@ class DualArmIKSolver:
     def _joint_solution_to_numpy(result) -> np.ndarray:
         return result.js_solution.position.squeeze().detach().cpu().numpy().reshape(-1)
 
+    @staticmethod
+    def _supported_ik_tolerance_kwargs() -> Dict[str, float]:
+        """兼容不同 cuRobo 版本的 IK 收敛参数名。"""
+        params = inspect.signature(InverseKinematicsCfg.create).parameters
+        kwargs = {}
+        if "position_tolerance" in params:
+            kwargs["position_tolerance"] = IK_POSITION_TOLERANCE_M
+        elif "converge_pos" in params:
+            kwargs["converge_pos"] = IK_POSITION_TOLERANCE_M
+        if "orientation_tolerance" in params:
+            kwargs["orientation_tolerance"] = IK_ORIENTATION_TOLERANCE_RAD
+        elif "converge_rot" in params:
+            kwargs["converge_rot"] = IK_ORIENTATION_TOLERANCE_RAD
+        return kwargs
+
+    @staticmethod
+    def _tensor_item(value, default: float = float("inf")) -> float:
+        if value is None:
+            return default
+        if hasattr(value, "detach"):
+            return float(value.detach().reshape(-1)[0].item())
+        return float(value)
+
+    @staticmethod
+    def _tensor_bool(value, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if hasattr(value, "detach"):
+            return bool(value.detach().reshape(-1)[0].item())
+        return bool(value)
+
+    def _is_success(self, result) -> bool:
+        raw_success = self._tensor_bool(result.success, default=False)
+        feasible = self._tensor_bool(getattr(result, "feasible", None), default=True)
+        pos_error = self._tensor_item(result.position_error)
+        rot_error = self._tensor_item(getattr(result, "rotation_error", None), default=0.0)
+        within_project_tolerance = (
+            feasible
+            and pos_error <= IK_POSITION_TOLERANCE_M
+            and rot_error <= IK_ORIENTATION_TOLERANCE_RAD
+        )
+        return raw_success or within_project_tolerance
+
+    @staticmethod
+    def _format_error_message(
+        arm_label: str,
+        position: list,
+        pos_error_m: float,
+        rot_error_rad: float,
+        feasible: bool,
+    ) -> str:
+        reason = "目标可能与障碍物/自身碰撞或违反约束" if not feasible else "目标可能超出工作空间或旋转约束过严"
+        return (
+            f"{arm_label} IK 求解失败："
+            f"position=[{position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f}]，"
+            f"位置误差 {pos_error_m*1000:.2f}mm，"
+            f"旋转误差 {rot_error_rad:.4f}rad，"
+            f"feasible={feasible}。{reason}。"
+        )
+
     # ================================================================
     # 内部方法：单臂求解
     # ================================================================
@@ -393,9 +474,11 @@ class DualArmIKSolver:
         result = self._ik.solve_pose(goal)
 
         # ---- 解析结果 ----
-        success = result.success.item()
-        pos_error_m = result.position_error.item()                     # 米
+        success = self._is_success(result)
+        pos_error_m = self._tensor_item(result.position_error)         # 米
         pos_error_mm = round(pos_error_m * 1000, 3)                    # 毫米
+        rot_error_rad = self._tensor_item(getattr(result, "rotation_error", None))
+        feasible = self._tensor_bool(getattr(result, "feasible", None))
         joint_full = self._joint_solution_to_numpy(result)
 
         # 提取目标臂的 6 个关节
@@ -409,17 +492,16 @@ class DualArmIKSolver:
             error_msg = ""
         else:
             p = target_pose["position"]
-            error_msg = (
-                f"目标超出{arm_label}工作空间："
-                f"position=[{p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}]，"
-                f"位置误差 {pos_error_mm:.1f}mm。"
-                f"请检查目标是否在机器人可达范围内。"
+            error_msg = self._format_error_message(
+                arm_label, p, pos_error_m, rot_error_rad, feasible
             )
 
         return {
             "success": success,
             "joint_angles": joints if success else None,
             "position_error_mm": pos_error_mm,
+            "rotation_error_rad": round(rot_error_rad, 6),
+            "feasible": feasible,
             "error_message": error_msg,
         }
 

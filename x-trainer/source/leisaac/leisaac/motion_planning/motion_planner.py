@@ -15,6 +15,7 @@ cuRobo 轨迹规划原理：
 依赖：curobo, torch, numpy
 """
 
+import inspect
 import torch
 import numpy as np
 from typing import Dict, List, Optional
@@ -26,6 +27,8 @@ from .curobo_config import build_curobo_robot_config
 
 
 _DEFAULT_COLLISION_CACHE = {"cuboid": 32}
+MOTION_POSITION_TOLERANCE_M = 0.002
+MOTION_ORIENTATION_TOLERANCE_RAD = 0.10
 
 
 # ============================================================
@@ -159,18 +162,17 @@ class DualArmMotionPlanner:
         """
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         robot_config = build_curobo_robot_config(robot_config)
+        planner_kwargs = {
+            "robot": robot_config,
+            "collision_cache": _DEFAULT_COLLISION_CACHE,
+        }
+        planner_kwargs.update(self._supported_motion_tolerance_kwargs())
+
         # ---- 创建规划器配置 ----
         if scene_model:
-            config = MotionPlannerCfg.create(
-                robot=robot_config,
-                scene_model=scene_model,
-                collision_cache=_DEFAULT_COLLISION_CACHE,
-            )
+            config = MotionPlannerCfg.create(scene_model=scene_model, **planner_kwargs)
         else:
-            config = MotionPlannerCfg.create(
-                robot=robot_config,
-                collision_cache=_DEFAULT_COLLISION_CACHE,
-            )
+            config = MotionPlannerCfg.create(**planner_kwargs)
 
         # ---- 创建 MotionPlanner 实例 ----
         self._planner = MotionPlanner(config)
@@ -199,6 +201,10 @@ class DualArmMotionPlanner:
         print(f"  关节: {self._joint_names}")
         print(f"  工具帧: {self._tool_frames}")
         print(f"  插值 dt: {self._interp_dt:.4f}s")
+        print(
+            f"  收敛阈值: pos≤{MOTION_POSITION_TOLERANCE_M*1000:.1f}mm, "
+            f"rot≤{MOTION_ORIENTATION_TOLERANCE_RAD:.3f}rad"
+        )
 
     # ================================================================
     # 公开接口 1：warmup —— 预热（编译 CUDA 图）
@@ -513,6 +519,21 @@ class DualArmMotionPlanner:
             return list(range(6))
         else:
             return list(range(6, 12))
+
+    @staticmethod
+    def _supported_motion_tolerance_kwargs() -> Dict[str, float]:
+        """兼容不同 cuRobo 版本的规划器收敛参数名。"""
+        params = inspect.signature(MotionPlannerCfg.create).parameters
+        kwargs = {}
+        if "position_tolerance" in params:
+            kwargs["position_tolerance"] = MOTION_POSITION_TOLERANCE_M
+        elif "converge_pos" in params:
+            kwargs["converge_pos"] = MOTION_POSITION_TOLERANCE_M
+        if "orientation_tolerance" in params:
+            kwargs["orientation_tolerance"] = MOTION_ORIENTATION_TOLERANCE_RAD
+        elif "converge_rot" in params:
+            kwargs["converge_rot"] = MOTION_ORIENTATION_TOLERANCE_RAD
+        return kwargs
 
     def _make_joint_state(self, joints: list, arm: str = "left") -> JointState:
         """
