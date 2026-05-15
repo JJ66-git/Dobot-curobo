@@ -20,7 +20,7 @@ from typing import Dict, Optional
 
 from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
 from curobo.types import Pose, GoalToolPose
-from .curobo_config import resolve_robot_config_input
+from .curobo_config import build_curobo_robot_config
 
 
 # ============================================================
@@ -67,7 +67,7 @@ class DualArmIKSolver:
         """
         self.num_seeds = num_seeds
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        robot_config = resolve_robot_config_input(robot_config)
+        robot_config = build_curobo_robot_config(robot_config)
 
         # ---- 创建 IK 配置 ----
         # InverseKinematicsCfg.create() 会解析 YAML 中的 URDF、碰撞球、关节空间等

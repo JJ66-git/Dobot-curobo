@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
 from curobo.types import JointState, GoalToolPose
 from curobo.scene import Cuboid, Scene
-from .curobo_config import resolve_robot_config_input
+from .curobo_config import build_curobo_robot_config
 
 
 # ============================================================
@@ -155,7 +155,7 @@ class DualArmMotionPlanner:
             device:       计算设备，默认自动选择 ("cuda" 如果有 GPU，否则 "cpu")。
         """
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        robot_config = resolve_robot_config_input(robot_config)
+        robot_config = build_curobo_robot_config(robot_config)
         # ---- 创建规划器配置 ----
         if scene_model:
             config = MotionPlannerCfg.create(

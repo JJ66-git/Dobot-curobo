@@ -36,6 +36,29 @@ def resolve_robot_config_input(robot_config: RobotConfigInput) -> RobotConfigInp
     return _load_robot_config(config_path)
 
 
+def build_curobo_robot_config(robot_config: RobotConfigInput) -> Any:
+    """Build a cuRobo-native robot config object for repo-local robot files."""
+    if isinstance(robot_config, dict):
+        _, _, RobotCfg = _import_curobo_robot_config_helpers()
+        return RobotCfg.create(_normalize_robot_config_dict(robot_config))
+
+    config_path = _resolve_config_path(robot_config)
+    if config_path is None:
+        return robot_config
+
+    normalized = _load_robot_config(config_path)
+    kinematics = normalized.get("robot_cfg", {}).get("kinematics", {})
+    ContentPath, load_robot_yaml, RobotCfg = _import_curobo_robot_config_helpers()
+
+    content_path = ContentPath(
+        robot_config_absolute_path=str(config_path),
+        robot_urdf_absolute_path=kinematics.get("urdf_path"),
+        robot_asset_absolute_path=kinematics.get("asset_root_path"),
+    )
+    robot_data = load_robot_yaml(content_path)
+    return RobotCfg.create(robot_data)
+
+
 def _resolve_config_path(robot_config: str) -> Path | None:
     candidate = Path(robot_config)
     if candidate.is_absolute() or candidate.exists():
@@ -92,3 +115,11 @@ def _make_absolute_path(raw_path: str, base_dir: Path) -> Path:
     if path.is_absolute():
         return path
     return (base_dir / path).resolve()
+
+
+def _import_curobo_robot_config_helpers():
+    from curobo._src.robot.loader.util import load_robot_yaml
+    from curobo._src.types.content_path import ContentPath
+    from curobo._src.types.robot import RobotCfg
+
+    return ContentPath, load_robot_yaml, RobotCfg
