@@ -160,7 +160,7 @@ class DualArmMotionPlanner:
     def __init__(self, robot_config: str = "xtrainer.yml",
                  scene_model: Optional[str] = None,
                  device: str = None,
-                 self_collision_check: bool = False,
+                 self_collision_check: bool = True,
                  use_graph_seed: bool = False):
         """
         初始化运动规划器。

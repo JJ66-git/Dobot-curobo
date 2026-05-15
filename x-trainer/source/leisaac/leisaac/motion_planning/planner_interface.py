@@ -139,7 +139,7 @@ class MotionPlanningModule:
                  ik_num_seeds: int = 32,
                  self_collision_check: bool = True,
                  accept_converged_ik_without_feasible: bool = True,
-                 planner_self_collision_check: bool = False,
+                 planner_self_collision_check: bool = True,
                  planner_use_graph_seed: bool = False):
         """
         初始化运动规划模块。
