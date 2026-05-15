@@ -184,18 +184,18 @@ class DualArmIKSolver:
         self._validate_pose(right_pose, "右臂")
 
         # ---- 构造 cuRobo Pose 张量 ----
-        # shape = (1, 3) 和 (1, 4)，batch 维度为 1
+        # shape = [batch, goalsets, poses, coord] = [1, 1, 1, 3/4]
         left_pos = torch.tensor(
-            [left_pose["position"]], dtype=torch.float32, device=self._device
+            [[[[left_pose["position"]]]]], dtype=torch.float32, device=self._device
         )
         left_quat = torch.tensor(
-            [left_pose["quaternion"]], dtype=torch.float32, device=self._device
+            [[[[left_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
         )
         right_pos = torch.tensor(
-            [right_pose["position"]], dtype=torch.float32, device=self._device
+            [[[[right_pose["position"]]]]], dtype=torch.float32, device=self._device
         )
         right_quat = torch.tensor(
-            [right_pose["quaternion"]], dtype=torch.float32, device=self._device
+            [[[[right_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----
@@ -469,12 +469,12 @@ class DualArmIKSolver:
         # ---- 参数校验 ----
         self._validate_pose(target_pose, arm_label)
 
-        # ---- 构造 cuRobo Pose 张量 ----
+        # ---- 构造 cuRobo Pose 张量 [batch, goalsets, poses, coord] ----
         pos_tensor = torch.tensor(
-            [target_pose["position"]], dtype=torch.float32, device=self._device
+            [[[[target_pose["position"]]]]], dtype=torch.float32, device=self._device
         )
         quat_tensor = torch.tensor(
-            [target_pose["quaternion"]], dtype=torch.float32, device=self._device
+            [[[[target_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----

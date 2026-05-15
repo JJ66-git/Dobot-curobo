@@ -282,8 +282,8 @@ class DualArmMotionPlanner:
         # 构造起始关节状态
         q_start = self._make_joint_state(current_joints, arm, passive_joints)
 
-        # 构造目标位姿。GoalToolPose.from_poses() 接收每个 Pose 的 2D batch 张量，
-        # 然后在内部组装成 cuRobo 需要的 5D 目标张量。
+        # 构造目标位姿。GoalToolPose.from_poses() 需要 4D 张量：
+        # [batch_size, num_goalsets, num_poses, coord]，典型值 [1, 1, 1, 3/4]
         goal = self._make_goal_pose(target_frame, target_pose)
 
         # ---- 调用 cuRobo 规划 ----
@@ -435,7 +435,7 @@ class DualArmMotionPlanner:
         # 构造起始状态
         q_start = self._make_joint_state(current_joints, arm)
 
-        # 构造抓取位姿（GoalToolPose 需要 5D 张量）
+        # 构造抓取位姿（GoalToolPose 需要 4D 张量）
         grasp_goal = self._make_goal_pose(target_frame, grasp_pose)
 
         # ---- 调用 cuRobo 三阶段抓取规划 ----
@@ -710,19 +710,54 @@ class DualArmMotionPlanner:
     def _make_goal_pose(self, target_frame: str, target_pose: Dict) -> GoalToolPose:
         """
         构造 cuRobo GoalToolPose。
-        target_pose: {"position": [x,y,z], "quaternion": [qw,qx,qy,qz]}
+
+        参数:
+            target_frame: 工具帧名称（如 "left_ee_link"）
+            target_pose: {"position": [x,y,z], "quaternion": [qw,qx,qy,qz]}
+
+        返回:
+            GoalToolPose，包含 4D 张量:
+            - position.shape: [batch, goalsets, poses, 3]
+            - quaternion.shape: [batch, goalsets, poses, 4]
         """
-        pos = torch.tensor(
-            [target_pose["position"]], dtype=torch.float32, device=self._device
+        # ---- 输入验证 ----
+        if "position" not in target_pose or "quaternion" not in target_pose:
+            raise ValueError("target_pose 必须包含 'position' 和 'quaternion' 键")
+
+        pos = target_pose["position"]
+        quat = target_pose["quaternion"]
+
+        if not isinstance(pos, (list, tuple, np.ndarray)) or len(pos) != 3:
+            raise ValueError(f"position 必须是长度为3的序列，收到: {pos}")
+
+        if not isinstance(quat, (list, tuple, np.ndarray)) or len(quat) != 4:
+            raise ValueError(f"quaternion 必须是长度为4的序列，收到: {quat}")
+
+        pos_array = np.asarray(pos, dtype=np.float32)
+        quat_array = np.asarray(quat, dtype=np.float32)
+
+        if np.any(~np.isfinite(pos_array)):
+            raise ValueError(f"position 包含非有限值: {pos}")
+
+        if np.any(~np.isfinite(quat_array)):
+            raise ValueError(f"quaternion 包含非有限值: {quat}")
+
+        quat_norm = np.linalg.norm(quat_array)
+        if not np.isclose(quat_norm, 1.0, atol=0.1):
+            raise ValueError(f"quaternion 应该归一化（模≈1），当前模: {quat_norm:.3f}")
+
+        # ---- 构造 4D 张量 [batch, goalsets, poses, coord] ----
+        pos_tensor = torch.tensor(
+            [[[[pos_array]]]], dtype=torch.float32, device=self._device
         )
-        quat = torch.tensor(
-            [target_pose["quaternion"]], dtype=torch.float32, device=self._device
+        quat_tensor = torch.tensor(
+            [[[[quat_array]]]], dtype=torch.float32, device=self._device
         )
-        goal_dict = self._make_single_arm_goal_dict(target_frame, pos, quat)
+        goal_dict = self._make_single_arm_goal_dict(target_frame, pos_tensor, quat_tensor)
         goal = GoalToolPose.from_poses(
             goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
         )
-        if goal.position.ndim != 5 or goal.quaternion.ndim != 5:
+        if goal.position.ndim != 4 or goal.quaternion.ndim != 4:
             raise ValueError(
                 "GoalToolPose shape error: "
                 f"position={tuple(goal.position.shape)}, "
