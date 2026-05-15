@@ -1,24 +1,22 @@
 #!/bin/bash
 set -e
 
-echo "=== Dobot X-Trainer 运动规划模块 - 工作站部署脚本 ==="
+export PYTHONNOUSERSITE=1
 
-# 1. 检查 GPU
-echo "[1/6] 检查 GPU..."
-nvidia-smi || { echo "错误: 未检测到 NVIDIA GPU"; exit 1; }
+echo "=== Dobot X-Trainer motion planning workstation setup ==="
 
-# 2. 创建 conda 环境
-echo "[2/6] 创建 conda 环境..."
+echo "[1/6] Check GPU..."
+nvidia-smi || { echo "Error: NVIDIA GPU not found"; exit 1; }
+
+echo "[2/6] Create conda environment..."
 conda create -n curobo python=3.10 -y
 eval "$(conda shell.bash hook)"
 conda activate curobo
 
-# 3. 安装 PyTorch
-echo "[3/6] 安装 PyTorch..."
+echo "[3/6] Install PyTorch..."
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
-# 4. 安装 cuRobo
-echo "[4/6] 安装 cuRobo..."
+echo "[4/6] Install cuRobo..."
 cd ~
 if [ ! -d "curobo" ]; then
     git clone https://github.com/NVlabs/curobo.git
@@ -26,27 +24,27 @@ fi
 cd curobo
 pip install -e .
 
-# 5. 克隆项目
-echo "[5/6] 克隆项目..."
+echo "[5/6] Clone project..."
 cd ~
 if [ ! -d "Dobot-curobo" ]; then
     git clone https://github.com/JJ66-git/Dobot-curobo.git
 fi
 cd Dobot-curobo
 
-# 6. 配置符号链接
-echo "[6/6] 配置符号链接..."
-CUROBO_ROBOT_DIR=$(python -c "import curobo, os; print(os.path.join(os.path.dirname(curobo.__file__), 'content', 'configs', 'robot'))")
-mkdir -p "$CUROBO_ROBOT_DIR"
-ln -sf "$(pwd)/curobo/my_x_trainer" "$CUROBO_ROBOT_DIR/xtrainer"
+echo "[6/6] Verify project-local robot config..."
+test -f "$(pwd)/curobo/my_x_trainer/xtrainer.yml"
+test -f "$(pwd)/curobo/my_x_trainer/xtrainer.urdf"
 
-# 安装基础依赖
 pip install numpy scipy pyyaml
 
 echo ""
-echo "=== 部署完成！==="
+echo "=== Setup complete ==="
 echo ""
-echo "下一步："
+echo "Notes:"
+echo "  Motion-planning code now resolves curobo/my_x_trainer using project-local absolute paths."
+echo "  No xtrainer symlink is written into the cuRobo installation directory."
+echo ""
+echo "Next:"
 echo "  conda activate curobo"
 echo "  cd ~/Dobot-curobo/x-trainer/source/leisaac"
 echo "  python -m leisaac.motion_planning.test_motion_planning"
