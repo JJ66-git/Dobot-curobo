@@ -19,7 +19,7 @@ import numpy as np
 from typing import Dict, Optional
 
 from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
-from curobo.types import Pose, GoalToolPose
+from curobo.types import JointState, Pose, GoalToolPose
 from .curobo_config import build_curobo_robot_config
 
 
@@ -94,6 +94,7 @@ class DualArmIKSolver:
         # ---- 获取 cspace 中的关节名称 ----
         # xtrainer.yml 的 cspace.joint_names 为 [J1_1~J1_6, J2_1~J2_6]
         self._joint_names = list(self._ik.joint_names)
+        self._home_tool_poses = self._compute_home_tool_poses()
 
         print(f"[IK 求解器] 初始化完成")
         print(f"  工具帧: {self._tool_frames}")
@@ -185,7 +186,9 @@ class DualArmIKSolver:
             self._left_frame:  Pose(position=left_pos,  quaternion=left_quat),
             self._right_frame: Pose(position=right_pos, quaternion=right_quat),
         }
-        goal = GoalToolPose.from_poses(goal_dict, num_goalset=1)
+        goal = GoalToolPose.from_poses(
+            goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
+        )
 
         # ---- GPU 求解 ----
         result = self._ik.solve_pose(goal)
@@ -299,11 +302,14 @@ class DualArmIKSolver:
             full[6:12] = joint_angles
             target_frame = self._right_frame
 
-        joint_state = torch.tensor(full, device=self._device, dtype=torch.float32)
+        joint_state = JointState.from_position(
+            torch.tensor([full], device=self._device, dtype=torch.float32),
+            joint_names=self._joint_names,
+        )
 
         # cuRobo 正运动学
         kin = self._ik.compute_kinematics(joint_state)
-        tool_pose = kin.tool_poses[target_frame]
+        tool_pose = kin.tool_poses.get_link_pose(target_frame)
 
         pos = tool_pose.position.squeeze().cpu().numpy().tolist()
         quat = tool_pose.quaternion.squeeze().cpu().numpy().tolist()
@@ -312,6 +318,36 @@ class DualArmIKSolver:
             "position": pos,
             "quaternion": quat,
         }
+
+    def _compute_home_tool_poses(self) -> Dict[str, Pose]:
+        """Compute both tool-frame poses at the zero joint configuration."""
+        home_joints = torch.zeros(
+            (1, len(self._joint_names)), dtype=torch.float32, device=self._device
+        )
+        home_state = JointState.from_position(
+            home_joints, joint_names=self._joint_names
+        )
+        return self._ik.compute_kinematics(home_state).tool_poses.to_dict()
+
+    def _make_single_arm_goal_dict(
+        self, target_frame: str, position: torch.Tensor, quaternion: torch.Tensor
+    ) -> Dict[str, Pose]:
+        goal_dict = {
+            frame: Pose(
+                position=pose.position.clone(),
+                quaternion=pose.quaternion.clone(),
+                name=frame,
+                normalize_rotation=False,
+            )
+            for frame, pose in self._home_tool_poses.items()
+        }
+        goal_dict[target_frame] = Pose(
+            position=position,
+            quaternion=quaternion,
+            name=target_frame,
+            normalize_rotation=False,
+        )
+        return goal_dict
 
     # ================================================================
     # 内部方法：单臂求解
@@ -342,8 +378,12 @@ class DualArmIKSolver:
         )
 
         # ---- 构造 GoalToolPose ----
-        goal_dict = {target_frame: Pose(position=pos_tensor, quaternion=quat_tensor)}
-        goal = GoalToolPose.from_poses(goal_dict, num_goalset=1)
+        goal_dict = self._make_single_arm_goal_dict(
+            target_frame, pos_tensor, quat_tensor
+        )
+        goal = GoalToolPose.from_poses(
+            goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
+        )
 
         # ---- GPU 求解 ----
         result = self._ik.solve_pose(goal)

@@ -25,6 +25,9 @@ from curobo.scene import Cuboid, Scene
 from .curobo_config import build_curobo_robot_config
 
 
+_DEFAULT_COLLISION_CACHE = {"cuboid": 32}
+
+
 # ============================================================
 # 第一部分：场景构建器
 # ============================================================
@@ -161,9 +164,13 @@ class DualArmMotionPlanner:
             config = MotionPlannerCfg.create(
                 robot=robot_config,
                 scene_model=scene_model,
+                collision_cache=_DEFAULT_COLLISION_CACHE,
             )
         else:
-            config = MotionPlannerCfg.create(robot=robot_config)
+            config = MotionPlannerCfg.create(
+                robot=robot_config,
+                collision_cache=_DEFAULT_COLLISION_CACHE,
+            )
 
         # ---- 创建 MotionPlanner 实例 ----
         self._planner = MotionPlanner(config)
