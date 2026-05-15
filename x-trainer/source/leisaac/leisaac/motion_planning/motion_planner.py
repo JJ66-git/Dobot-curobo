@@ -256,7 +256,7 @@ class DualArmMotionPlanner:
             self._planner.update_world(self._scene_builder.get_scene())
 
         # 构造起始关节状态
-        q_start = self._make_joint_state(current_joints)
+        q_start = self._make_joint_state(current_joints, arm)
 
         # 构造目标位姿（cuRobo 需要 5D 张量）
         goal = self._make_goal_pose(target_frame, target_pose)
@@ -315,7 +315,7 @@ class DualArmMotionPlanner:
             同 plan_to_pose
         """
         # 构造起始状态
-        q_start = self._make_joint_state(start_joints)
+        q_start = self._make_joint_state(start_joints, arm)
 
         # 构造目标状态（作为 goalset）
         full_goal = np.zeros(12, dtype=np.float32)
@@ -394,7 +394,7 @@ class DualArmMotionPlanner:
         joint_indices = self._get_joint_indices(arm)
 
         # 构造起始状态
-        q_start = self._make_joint_state(current_joints)
+        q_start = self._make_joint_state(current_joints, arm)
 
         # 构造抓取位姿（GoalToolPose 需要 5D 张量）
         grasp_goal = self._make_goal_pose(target_frame, grasp_pose)
@@ -514,17 +514,38 @@ class DualArmMotionPlanner:
         else:
             return list(range(6, 12))
 
-    def _make_joint_state(self, joints: list) -> JointState:
+    def _make_joint_state(self, joints: list, arm: str = "left") -> JointState:
         """
         构造 cuRobo JointState。
         将 6 关节角度扩展为 12 关节（另一半补零）。
         """
         full = np.zeros(12, dtype=np.float32)
-        full[:6] = joints  # 左臂先填，实际规划时 cuRobo 会按 tool_frame 选取
+        full[self._get_joint_indices(arm)] = joints
         return JointState.from_position(
-            torch.as_tensor([full], dtype=torch.float32, device=self._device),
+            torch.as_tensor(full[None, :], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
+
+    def forward_kinematics(self, joint_angles: list, arm: str = "left") -> Dict:
+        """
+        正运动学：从目标臂 6 个关节角计算末端位姿。
+
+        主要用于测试和调试：先用 FK 生成当前 URDF 确认可达的目标，
+        再把这个目标交给 IK/规划器验证，避免测试坐标与机器人模型脱节。
+        """
+        full = np.zeros(12, dtype=np.float32)
+        full[self._get_joint_indices(arm)] = joint_angles
+        joint_state = JointState.from_position(
+            torch.as_tensor(full[None, :], dtype=torch.float32, device=self._device),
+            joint_names=self._joint_names,
+        )
+        target_frame = self._get_target_frame(arm)
+        kin = self._planner.compute_kinematics(joint_state)
+        tool_pose = kin.tool_poses.get_link_pose(target_frame)
+        return {
+            "position": tool_pose.position.squeeze().detach().cpu().numpy().tolist(),
+            "quaternion": tool_pose.quaternion.squeeze().detach().cpu().numpy().tolist(),
+        }
 
     def _make_goal_pose(self, target_frame: str, target_pose: Dict) -> GoalToolPose:
         """

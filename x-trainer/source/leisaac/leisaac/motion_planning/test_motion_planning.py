@@ -51,6 +51,26 @@ def _info(msg: str):
     print(f"    → {msg}")
 
 
+LEFT_TEST_JOINTS = [-0.35, 1.00, -0.35, 0.15, 0.0, 0.0]
+RIGHT_TEST_JOINTS = [0.35, 1.00, -0.35, 0.15, 0.0, 0.0]
+LEFT_GRASP_JOINTS = [-0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
+LEFT_PLACE_JOINTS = [0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
+RIGHT_GRASP_JOINTS = [0.35, 1.45, -0.55, 0.25, 0.0, 0.0]
+
+
+def _pose_from_fk(fk_source, joint_angles: list, arm: str) -> dict:
+    """
+    用当前 URDF 的 FK 生成已知可达目标位姿。
+
+    这样测试验证的是 IK/规划链路本身，而不是旧机器人尺寸下写死的坐标。
+    """
+    pose = fk_source.forward_kinematics(joint_angles, arm)
+    return {
+        "position": [float(v) for v in pose["position"]],
+        "quaternion": [float(v) for v in pose["quaternion"]],
+    }
+
+
 # ============================================================
 # 测试 1：坐标转换精度
 # ============================================================
@@ -177,7 +197,7 @@ def test_ik_solver():
     # ---- 2.2 左臂 IK ----
     _sub("2.2 左臂 IK 求解")
     total += 1
-    left_target = {"position": [0.3, -0.2, 0.3], "quaternion": [1.0, 0.0, 0.0, 0.0]}
+    left_target = _pose_from_fk(solver, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
     result_l = solver.solve_left_arm(left_target)
     elapsed = (time.time() - t0) * 1000
@@ -195,7 +215,7 @@ def test_ik_solver():
     # ---- 2.3 右臂 IK ----
     _sub("2.3 右臂 IK 求解")
     total += 1
-    right_target = {"position": [0.3, 0.2, 0.3], "quaternion": [1.0, 0.0, 0.0, 0.0]}
+    right_target = _pose_from_fk(solver, RIGHT_TEST_JOINTS, "right")
     result_r = solver.solve_right_arm(right_target)
     _info(f"成功: {result_r['success']}")
     if result_r["success"]:
@@ -281,7 +301,7 @@ def test_motion_planner():
     # ---- 3.2 左臂 plan_to_pose ----
     _sub("3.2 左臂 plan_to_pose")
     total += 1
-    left_target = {"position": [0.3, -0.15, 0.25], "quaternion": [1.0, 0.0, 0.0, 0.0]}
+    left_target = _pose_from_fk(planner, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
     result_l = planner.plan_to_pose("left", left_target, current_joints=[0]*6)
     elapsed = (time.time() - t0) * 1000
@@ -297,7 +317,7 @@ def test_motion_planner():
     # ---- 3.3 右臂 plan_to_pose ----
     _sub("3.3 右臂 plan_to_pose")
     total += 1
-    right_target = {"position": [0.3, 0.15, 0.25], "quaternion": [1.0, 0.0, 0.0, 0.0]}
+    right_target = _pose_from_fk(planner, RIGHT_TEST_JOINTS, "right")
     result_r = planner.plan_to_pose("right", right_target, current_joints=[0]*6)
     assert result_r["success"], f"右臂规划失败: {result_r['error_message']}"
     _ok("右臂 plan_to_pose PASS")
@@ -331,8 +351,10 @@ def test_motion_planner():
     # ---- 3.6 plan_grasp 三阶段 ----
     _sub("3.6 plan_grasp 三阶段抓取规划")
     total += 1
-    grasp_pose = {"position": [0.35, -0.15, 0.18], "quaternion": [1.0, 0.0, 0.0, 0.0]}
-    result_g = planner.plan_grasp("left", grasp_pose, current_joints=[0]*6)
+    grasp_pose = _pose_from_fk(planner, LEFT_GRASP_JOINTS, "left")
+    result_g = planner.plan_grasp(
+        "left", grasp_pose, current_joints=[0]*6, approach_offset=0.03, lift_offset=0.03
+    )
     if result_g["success"]:
         _info(f"接近段: {len(result_g['approach_trajectory'])} 点")
         _info(f"抓取段: {len(result_g['grasp_trajectory'])} 点")
@@ -523,7 +545,7 @@ def test_full_pipeline():
     # ---- 5.3 左臂完整规划 ----
     _sub("5.3 左臂 plan() 完整规划")
     total += 1
-    target_left = {"position": [0.35, -0.15, 0.25], "quaternion": [1, 0, 0, 0]}
+    target_left = _pose_from_fk(module._ik, LEFT_TEST_JOINTS, "left")
     t0 = time.time()
     result = module.plan(target_left, obstacles=obstacles, arm="left")
     elapsed = (time.time() - t0) * 1000
@@ -531,7 +553,10 @@ def test_full_pipeline():
     _info(f"轨迹点: {result.n_waypoints}")
     _info(f"时长: {result.duration:.2f}s")
     _info(f"耗时: {elapsed:.1f}ms")
-    _info(f"目标关节: {[f'{a:.4f}' for a in result.target_joints]}")
+    if result.target_joints is not None:
+        _info(f"目标关节: {[f'{a:.4f}' for a in result.target_joints]}")
+    else:
+        _info("目标关节: None（规划未成功生成目标关节）")
     assert result.success, f"左臂规划失败: {result.error_message}"
     assert result.n_waypoints > 0, "轨迹点数为 0"
     _ok("左臂 plan() PASS")
@@ -540,7 +565,7 @@ def test_full_pipeline():
     # ---- 5.4 右臂完整规划 ----
     _sub("5.4 右臂 plan() 完整规划")
     total += 1
-    target_right = {"position": [0.35, 0.15, 0.25], "quaternion": [1, 0, 0, 0]}
+    target_right = _pose_from_fk(module._ik, RIGHT_TEST_JOINTS, "right")
     result_r = module.plan(target_right, obstacles=obstacles, arm="right")
     assert result_r.success, f"右臂规划失败: {result_r.error_message}"
     _ok("右臂 plan() PASS")
@@ -563,8 +588,8 @@ def test_full_pipeline():
     # ---- 5.6 抓取序列规划 ----
     _sub("5.6 plan_grasp_sequence() 完整抓取序列")
     total += 1
-    grasp_pose = {"position": [0.35, -0.15, 0.18], "quaternion": [1, 0, 0, 0]}
-    place_pose = {"position": [0.35, 0.15, 0.30], "quaternion": [1, 0, 0, 0]}
+    grasp_pose = _pose_from_fk(module._ik, LEFT_GRASP_JOINTS, "left")
+    place_pose = _pose_from_fk(module._ik, LEFT_PLACE_JOINTS, "left")
     t0 = time.time()
     result_seq = module.plan_grasp_sequence(grasp_pose, place_pose, obstacles, arm="left")
     elapsed = (time.time() - t0) * 1000
