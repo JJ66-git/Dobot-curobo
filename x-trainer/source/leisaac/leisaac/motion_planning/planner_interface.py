@@ -138,7 +138,9 @@ class MotionPlanningModule:
     def __init__(self, robot_config: str = "xtrainer.yml",
                  ik_num_seeds: int = 32,
                  self_collision_check: bool = True,
-                 accept_converged_ik_without_feasible: bool = True):
+                 accept_converged_ik_without_feasible: bool = True,
+                 planner_self_collision_check: bool = False,
+                 planner_use_graph_seed: bool = False):
         """
         初始化运动规划模块。
 
@@ -173,7 +175,11 @@ class MotionPlanningModule:
 
         # ---- 子模块 3：运动规划器 ----
         print("[3/3] 加载运动规划器...")
-        self._planner = DualArmMotionPlanner(robot_config=robot_config)
+        self._planner = DualArmMotionPlanner(
+            robot_config=robot_config,
+            self_collision_check=planner_self_collision_check,
+            use_graph_seed=planner_use_graph_seed,
+        )
 
         # ---- 任务配置 ----
         self._task_config = TaskConfig()

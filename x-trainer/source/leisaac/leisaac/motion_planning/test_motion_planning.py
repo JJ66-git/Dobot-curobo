@@ -20,7 +20,7 @@ import math
 import numpy as np
 
 
-REGCTRL_DIAG_VERSION = "regctrl-curobo-diag-2026-05-15-v3"
+REGCTRL_DIAG_VERSION = "regctrl-curobo-diag-2026-05-15-v5"
 
 
 # ============================================================
@@ -56,15 +56,15 @@ def _info(msg: str):
 
 LEFT_TEST_JOINT_CANDIDATES = [
     [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
-    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [-0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
     [-0.45, 0.95, -0.25, 0.12, 0.0, 0.0],
+    [-0.55, 1.10, -0.40, 0.20, 0.0, 0.0],
 ]
 RIGHT_TEST_JOINT_CANDIDATES = [
     [0.35, 0.85, -0.30, 0.10, 0.0, 0.0],
-    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0],
     [0.35, 1.00, -0.35, 0.15, 0.0, 0.0],
     [0.45, 0.95, -0.25, 0.12, 0.0, 0.0],
+    [0.55, 1.10, -0.40, 0.20, 0.0, 0.0],
 ]
 LEFT_GRASP_JOINTS = [-0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
 LEFT_PLACE_JOINTS = [0.20, 0.95, -0.35, 0.10, 0.0, 0.0]
@@ -475,6 +475,7 @@ def test_motion_planner():
     builder.add_box("障碍盒", [0.3, 0.1, 0.25], [0.05, 0.05, 0.1])
     planner.apply_scene()
     planner.warmup()
+    assert not planner._use_graph_seed, "诊断测试应默认关闭 PRM 图搜索种子，避免被 graph planner 的误碰撞判定卡住"
     _ok("初始化 + 场景 + 预热 PASS")
     passed += 1
 

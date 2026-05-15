@@ -29,6 +29,8 @@ from .curobo_config import build_curobo_robot_config
 _DEFAULT_COLLISION_CACHE = {"cuboid": 32}
 MOTION_POSITION_TOLERANCE_M = 0.002
 MOTION_ORIENTATION_TOLERANCE_RAD = 0.10
+PLANNER_MAX_ATTEMPTS = 8
+DISABLE_GRAPH_ATTEMPT = 10_000
 DEFAULT_LEFT_PARK_JOINTS = np.array(
     [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
 )
@@ -157,7 +159,9 @@ class DualArmMotionPlanner:
 
     def __init__(self, robot_config: str = "xtrainer.yml",
                  scene_model: Optional[str] = None,
-                 device: str = None):
+                 device: str = None,
+                 self_collision_check: bool = False,
+                 use_graph_seed: bool = False):
         """
         初始化运动规划器。
 
@@ -168,11 +172,14 @@ class DualArmMotionPlanner:
         """
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._robot_config_input = robot_config
+        self._self_collision_check = self_collision_check
+        self._use_graph_seed = use_graph_seed
         self._fallback_ik_solver = None
         robot_config = build_curobo_robot_config(robot_config)
         planner_kwargs = {
             "robot": robot_config,
             "collision_cache": _DEFAULT_COLLISION_CACHE,
+            "self_collision_check": self_collision_check,
         }
         planner_kwargs.update(self._supported_motion_tolerance_kwargs())
 
@@ -209,6 +216,8 @@ class DualArmMotionPlanner:
         print(f"  关节: {self._joint_names}")
         print(f"  工具帧: {self._tool_frames}")
         print(f"  插值 dt: {self._interp_dt:.4f}s")
+        print(f"  自碰撞检测: {self_collision_check}")
+        print(f"  图搜索种子: {use_graph_seed}")
         print(
             f"  收敛阈值: pos≤{MOTION_POSITION_TOLERANCE_M*1000:.1f}mm, "
             f"rot≤{MOTION_ORIENTATION_TOLERANCE_RAD:.3f}rad"
@@ -229,7 +238,10 @@ class DualArmMotionPlanner:
             num_iterations: 预热迭代次数，推荐 5
         """
         print("[运动规划器] 预热中（首次编译 CUDA 图，约 30 秒）...")
-        self._planner.warmup(enable_graph=True, num_warmup_iterations=num_iterations)
+        self._planner.warmup(
+            enable_graph=self._use_graph_seed,
+            num_warmup_iterations=num_iterations,
+        )
         print("[运动规划器] 预热完成")
 
     # ================================================================
@@ -275,7 +287,7 @@ class DualArmMotionPlanner:
         goal = self._make_goal_pose(target_frame, target_pose)
 
         # ---- 调用 cuRobo 规划 ----
-        result = self._planner.plan_pose(goal, q_start)
+        result = self._plan_pose(goal, q_start)
 
         # ---- 解析结果 ----
         if result is not None and result.success.any():
@@ -350,7 +362,7 @@ class DualArmMotionPlanner:
 
         # ---- 调用 cuRobo 规划 ----
         if hasattr(self._planner, "plan_cspace"):
-            result = self._planner.plan_cspace(goal_state=goal_js, current_state=q_start)
+            result = self._plan_cspace(goal_state=goal_js, current_state=q_start)
         elif hasattr(self._planner, "plan_single"):
             result = self._planner.plan_single(goal_js, q_start)
         else:
@@ -599,6 +611,39 @@ class DualArmMotionPlanner:
         elif "converge_rot" in params:
             kwargs["converge_rot"] = MOTION_ORIENTATION_TOLERANCE_RAD
         return kwargs
+
+    def _planning_retry_kwargs(self, method) -> Dict[str, int]:
+        """
+        Return retry options supported by the installed cuRobo planner.
+
+        The workstation logs show repeated "Start or End state in collision"
+        from cuRobo's PRM graph planner even when the test world has no
+        obstacles. For this project wrapper, prefer direct TrajOpt retries by
+        default and only enable graph seeding when explicitly requested.
+        """
+        params = inspect.signature(method).parameters
+        kwargs = {}
+        if "max_attempts" in params:
+            kwargs["max_attempts"] = PLANNER_MAX_ATTEMPTS
+        if "enable_graph_attempt" in params:
+            kwargs["enable_graph_attempt"] = (
+                1 if self._use_graph_seed else DISABLE_GRAPH_ATTEMPT
+            )
+        return kwargs
+
+    def _plan_pose(self, goal: GoalToolPose, q_start: JointState):
+        return self._planner.plan_pose(
+            goal,
+            q_start,
+            **self._planning_retry_kwargs(self._planner.plan_pose),
+        )
+
+    def _plan_cspace(self, goal_state: JointState, current_state: JointState):
+        return self._planner.plan_cspace(
+            goal_state=goal_state,
+            current_state=current_state,
+            **self._planning_retry_kwargs(self._planner.plan_cspace),
+        )
 
     def _make_joint_state(
         self, joints: list, arm: str = "left", passive_joints: Optional[list] = None
