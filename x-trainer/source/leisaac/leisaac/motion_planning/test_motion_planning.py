@@ -379,8 +379,31 @@ def test_motion_planner():
     _ok("初始化 + 场景 + 预热 PASS")
     passed += 1
 
-    # ---- 3.2 左臂 plan_to_pose ----
-    _sub("3.2 左臂 plan_to_pose")
+    # ---- 3.2 单臂 12 关节状态补全检查 ----
+    _sub("3.2 单臂 12 关节状态补全检查")
+    total += 1
+    left_full = planner._make_full_joint_array(LEFT_PLAN_START_JOINTS, "left")
+    right_full = planner._make_full_joint_array(RIGHT_PLAN_START_JOINTS, "right")
+    passive_probe = [0.11, 0.22, 0.33, 0.44, 0.55, 0.66]
+    left_with_passive = planner._make_full_joint_array(
+        LEFT_PLAN_START_JOINTS, "left", passive_probe
+    )
+    right_with_passive = planner._make_full_joint_array(
+        RIGHT_PLAN_START_JOINTS, "right", passive_probe
+    )
+    _info(f"左臂规划时右臂停放姿态: {[f'{a:.3f}' for a in left_full[6:12]]}")
+    _info(f"右臂规划时左臂停放姿态: {[f'{a:.3f}' for a in right_full[:6]]}")
+    assert np.allclose(left_full[:6], LEFT_PLAN_START_JOINTS), "左臂主动关节被改写"
+    assert np.allclose(left_full[6:12], RIGHT_PLAN_START_JOINTS), "左臂规划时右臂未使用安全停放姿态"
+    assert np.allclose(right_full[6:12], RIGHT_PLAN_START_JOINTS), "右臂主动关节被改写"
+    assert np.allclose(right_full[:6], LEFT_PLAN_START_JOINTS), "右臂规划时左臂未使用安全停放姿态"
+    assert np.allclose(left_with_passive[6:12], passive_probe), "左臂规划时未保留传入的右臂状态"
+    assert np.allclose(right_with_passive[:6], passive_probe), "右臂规划时未保留传入的左臂状态"
+    _ok("单臂 12 关节状态补全 PASS")
+    passed += 1
+
+    # ---- 3.3 左臂 plan_to_pose ----
+    _sub("3.3 左臂 plan_to_pose")
     total += 1
     t0 = time.time()
     left_target, result_l = _first_working_plan_target(
@@ -396,8 +419,8 @@ def test_motion_planner():
     _ok("左臂 plan_to_pose PASS")
     passed += 1
 
-    # ---- 3.3 右臂 plan_to_pose ----
-    _sub("3.3 右臂 plan_to_pose")
+    # ---- 3.4 右臂 plan_to_pose ----
+    _sub("3.4 右臂 plan_to_pose")
     total += 1
     right_target, result_r = _first_working_plan_target(
         planner, "right", RIGHT_TEST_JOINT_CANDIDATES
@@ -406,8 +429,8 @@ def test_motion_planner():
     _ok("右臂 plan_to_pose PASS")
     passed += 1
 
-    # ---- 3.4 轨迹平滑性检查 ----
-    _sub("3.4 轨迹平滑性检查")
+    # ---- 3.5 轨迹平滑性检查 ----
+    _sub("3.5 轨迹平滑性检查")
     total += 1
     traj = np.array(result_l["trajectory"])  # (N, 6)
     # 计算相邻点的最大关节角变化
@@ -422,8 +445,8 @@ def test_motion_planner():
     _ok("轨迹平滑性 PASS")
     passed += 1
 
-    # ---- 3.5 关节限位合规 ----
-    _sub("3.5 关节限位合规")
+    # ---- 3.6 关节限位合规 ----
+    _sub("3.6 关节限位合规")
     total += 1
     within_limits = np.all(traj >= -np.pi) and np.all(traj <= np.pi)
     _info(f"全部在 [-π, π] 内: {within_limits}")
@@ -431,8 +454,8 @@ def test_motion_planner():
     _ok("关节限位合规 PASS")
     passed += 1
 
-    # ---- 3.6 关节空间规划 ----
-    _sub("3.6 plan_joint_to_joint 关节空间规划")
+    # ---- 3.7 关节空间规划 ----
+    _sub("3.7 plan_joint_to_joint 关节空间规划")
     total += 1
     result_j = planner.plan_joint_to_joint(
         "left",
@@ -448,8 +471,8 @@ def test_motion_planner():
     _ok("plan_joint_to_joint PASS")
     passed += 1
 
-    # ---- 3.7 plan_grasp 三阶段 ----
-    _sub("3.7 plan_grasp 三阶段抓取规划")
+    # ---- 3.8 plan_grasp 三阶段 ----
+    _sub("3.8 plan_grasp 三阶段抓取规划")
     total += 1
     grasp_pose = _pose_from_fk(planner, LEFT_GRASP_JOINTS, "left")
     result_g = planner.plan_grasp(

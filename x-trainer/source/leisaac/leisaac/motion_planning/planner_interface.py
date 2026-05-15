@@ -26,7 +26,12 @@ from .task_state_machine import (
 
 try:
     from .ik_solver import DualArmIKSolver
-    from .motion_planner import DualArmMotionPlanner, SceneBuilder
+    from .motion_planner import (
+        DEFAULT_LEFT_PARK_JOINTS,
+        DEFAULT_RIGHT_PARK_JOINTS,
+        DualArmMotionPlanner,
+        SceneBuilder,
+    )
     _HAS_CUROBO = True
 except ImportError:
     _HAS_CUROBO = False
@@ -175,8 +180,8 @@ class MotionPlanningModule:
 
         # ---- 当前关节状态缓存（左右臂各 6 个关节）----
         self._current_joints = {
-            "left": np.zeros(6, dtype=np.float32).tolist(),
-            "right": np.zeros(6, dtype=np.float32).tolist(),
+            "left": DEFAULT_LEFT_PARK_JOINTS.tolist(),
+            "right": DEFAULT_RIGHT_PARK_JOINTS.tolist(),
         }
 
         print("\n运动规划模块就绪！\n")
@@ -243,10 +248,12 @@ class MotionPlanningModule:
 
         # ---- 步骤 c：运动规划 ----
         current = self._current_joints[arm]
+        passive = self._current_joints["right" if arm == "left" else "left"]
         plan_result = self._planner.plan_joint_to_joint(
             arm=arm,
             start_joints=current,
             goal_joints=target_joints,
+            passive_joints=passive,
         )
 
         if not plan_result["success"]:
@@ -338,6 +345,7 @@ class MotionPlanningModule:
         # ---- 逐段规划 ----
         all_trajectory = []
         current_joints = self._current_joints[arm]
+        passive_joints = self._current_joints["right" if arm == "left" else "left"]
         waypoint_details = []
 
         while wm.has_next():
@@ -362,6 +370,7 @@ class MotionPlanningModule:
                 arm=arm,
                 start_joints=current_joints,
                 goal_joints=ik_result["joint_angles"],
+                passive_joints=passive_joints,
             )
 
             if not plan_result["success"]:

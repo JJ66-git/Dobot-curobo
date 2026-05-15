@@ -18,7 +18,7 @@ cuRobo 轨迹规划原理：
 import inspect
 import torch
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
 from curobo.types import JointState, Pose, GoalToolPose
@@ -29,6 +29,12 @@ from .curobo_config import build_curobo_robot_config
 _DEFAULT_COLLISION_CACHE = {"cuboid": 32}
 MOTION_POSITION_TOLERANCE_M = 0.002
 MOTION_ORIENTATION_TOLERANCE_RAD = 0.10
+DEFAULT_LEFT_PARK_JOINTS = np.array(
+    [-0.20, 0.65, -0.20, 0.05, 0.0, 0.0], dtype=np.float32
+)
+DEFAULT_RIGHT_PARK_JOINTS = np.array(
+    [0.20, 0.65, -0.20, 0.05, 0.0, 0.0], dtype=np.float32
+)
 
 
 # ============================================================
@@ -313,7 +319,8 @@ class DualArmMotionPlanner:
 
     def plan_joint_to_joint(self, arm: str,
                             start_joints: list,
-                            goal_joints: list) -> Dict:
+                            goal_joints: list,
+                            passive_joints: Optional[list] = None) -> Dict:
         """
         关节空间到关节空间规划。
 
@@ -329,12 +336,11 @@ class DualArmMotionPlanner:
             同 plan_to_pose
         """
         # 构造起始状态
-        q_start = self._make_joint_state(start_joints, arm)
+        q_start = self._make_joint_state(start_joints, arm, passive_joints)
 
         # 构造目标状态（作为 goalset）
-        full_goal = np.zeros(12, dtype=np.float32)
         indices = self._get_joint_indices(arm)
-        full_goal[indices] = goal_joints
+        full_goal = self._make_full_joint_array(goal_joints, arm, passive_joints)
 
         goal_js = JointState.from_position(
             torch.as_tensor(full_goal[None, :], dtype=torch.float32, device=self._device),
@@ -559,8 +565,19 @@ class DualArmMotionPlanner:
         """
         if arm == "left":
             return list(range(6))
-        else:
+        elif arm == "right":
             return list(range(6, 12))
+        else:
+            raise ValueError(f"arm 必须是 'left' 或 'right'，收到 '{arm}'")
+
+    @staticmethod
+    def default_park_joints(arm: str) -> List[float]:
+        """Return a safe parked 6-joint posture for one arm."""
+        if arm == "left":
+            return DEFAULT_LEFT_PARK_JOINTS.tolist()
+        if arm == "right":
+            return DEFAULT_RIGHT_PARK_JOINTS.tolist()
+        raise ValueError(f"arm 必须是 'left' 或 'right'，收到 '{arm}'")
 
     @staticmethod
     def _supported_motion_tolerance_kwargs() -> Dict[str, float]:
@@ -577,17 +594,47 @@ class DualArmMotionPlanner:
             kwargs["converge_rot"] = MOTION_ORIENTATION_TOLERANCE_RAD
         return kwargs
 
-    def _make_joint_state(self, joints: list, arm: str = "left") -> JointState:
+    def _make_joint_state(
+        self, joints: list, arm: str = "left", passive_joints: Optional[list] = None
+    ) -> JointState:
         """
         构造 cuRobo JointState。
         将 6 关节角度扩展为 12 关节（另一半补零）。
         """
-        full = np.zeros(12, dtype=np.float32)
-        full[self._get_joint_indices(arm)] = joints
+        full = self._make_full_joint_array(joints, arm, passive_joints)
         return JointState.from_position(
             torch.as_tensor(full[None, :], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
+
+    def _make_full_joint_array(
+        self,
+        active_joints: Sequence[float],
+        arm: str = "left",
+        passive_joints: Optional[Sequence[float]] = None,
+    ) -> np.ndarray:
+        """
+        Expand one arm's 6 joints into the full 12-DOF robot state.
+
+        cuRobo collision-checks the whole robot. If the caller knows the other
+        arm's current state, keep it fixed there; otherwise park it in a known
+        safe posture instead of filling it with zeros.
+        """
+        active = np.asarray(active_joints, dtype=np.float32)
+        if active.shape != (6,):
+            raise ValueError(f"{arm} arm needs 6 joints, got shape {active.shape}")
+
+        full = np.empty(12, dtype=np.float32)
+        passive = None
+        if passive_joints is not None:
+            passive = np.asarray(passive_joints, dtype=np.float32)
+            if passive.shape != (6,):
+                raise ValueError(f"passive arm needs 6 joints, got shape {passive.shape}")
+
+        full[:6] = DEFAULT_LEFT_PARK_JOINTS if arm == "left" or passive is None else passive
+        full[6:12] = DEFAULT_RIGHT_PARK_JOINTS if arm == "right" or passive is None else passive
+        full[self._get_joint_indices(arm)] = active
+        return full
 
     def forward_kinematics(self, joint_angles: list, arm: str = "left") -> Dict:
         """
@@ -596,8 +643,7 @@ class DualArmMotionPlanner:
         主要用于测试和调试：先用 FK 生成当前 URDF 确认可达的目标，
         再把这个目标交给 IK/规划器验证，避免测试坐标与机器人模型脱节。
         """
-        full = np.zeros(12, dtype=np.float32)
-        full[self._get_joint_indices(arm)] = joint_angles
+        full = self._make_full_joint_array(joint_angles, arm)
         joint_state = JointState.from_position(
             torch.as_tensor(full[None, :], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
@@ -627,10 +673,11 @@ class DualArmMotionPlanner:
         )
 
     def _compute_home_tool_poses(self) -> Dict[str, Pose]:
+        full = np.concatenate(
+            (DEFAULT_LEFT_PARK_JOINTS, DEFAULT_RIGHT_PARK_JOINTS)
+        ).astype(np.float32)
         home_state = JointState.from_position(
-            torch.zeros(
-                (1, len(self._joint_names)), dtype=torch.float32, device=self._device
-            ),
+            torch.as_tensor(full[None, :], dtype=torch.float32, device=self._device),
             joint_names=self._joint_names,
         )
         return self._planner.compute_kinematics(home_state).tool_poses.to_dict()
