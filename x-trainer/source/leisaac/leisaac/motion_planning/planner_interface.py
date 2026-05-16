@@ -15,6 +15,7 @@
 """
 
 import json
+import os
 import time
 import numpy as np
 from typing import Dict, List, Optional
@@ -35,6 +36,13 @@ try:
     _HAS_CUROBO = True
 except ImportError:
     _HAS_CUROBO = False
+
+LINEAR_FALLBACK_ENV = "LEISAAC_ALLOW_LINEAR_FALLBACK"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 # ============================================================
@@ -60,6 +68,7 @@ class PlanResult:
     __slots__ = [
         "success", "arm", "trajectory", "duration", "n_waypoints",
         "target_joints", "gripper_command", "phase", "error_message",
+        "used_fallback",
     ]
 
     def __init__(self, success: bool, arm: str = "",
@@ -67,7 +76,8 @@ class PlanResult:
                  duration: float = 0.0, n_waypoints: int = 0,
                  target_joints: Optional[List[float]] = None,
                  gripper_command: float = 1.0,
-                 phase: str = "", error_message: str = ""):
+                 phase: str = "", error_message: str = "",
+                 used_fallback: bool = False):
         self.success = success
         self.arm = arm
         self.trajectory = trajectory
@@ -77,6 +87,7 @@ class PlanResult:
         self.gripper_command = gripper_command
         self.phase = phase
         self.error_message = error_message
+        self.used_fallback = used_fallback
 
     # ---- JSON 序列化 ----
 
@@ -92,6 +103,7 @@ class PlanResult:
             "gripper_command": self.gripper_command,
             "phase": self.phase,
             "error_message": self.error_message,
+            "used_fallback": self.used_fallback,
         }
 
     def to_json(self) -> str:
@@ -140,7 +152,8 @@ class MotionPlanningModule:
                  self_collision_check: bool = True,
                  accept_converged_ik_without_feasible: bool = True,
                  planner_self_collision_check: bool = True,
-                 planner_use_graph_seed: bool = False):
+                 planner_use_graph_seed: bool = False,
+                 allow_linear_fallback: bool = False):
         """
         初始化运动规划模块。
 
@@ -175,10 +188,18 @@ class MotionPlanningModule:
 
         # ---- 子模块 3：运动规划器 ----
         print("[3/3] 加载运动规划器...")
+        env_allow_linear_fallback = _env_flag_enabled(LINEAR_FALLBACK_ENV)
+        if env_allow_linear_fallback and not allow_linear_fallback:
+            print(
+                f"  注意: 已通过环境变量 {LINEAR_FALLBACK_ENV}=1 开启线性兜底轨迹。"
+                "该模式仅建议用于 Isaac Lab 联调/可视化排查。"
+            )
+        allow_linear_fallback = allow_linear_fallback or env_allow_linear_fallback
         self._planner = DualArmMotionPlanner(
             robot_config=robot_config,
             self_collision_check=planner_self_collision_check,
             use_graph_seed=planner_use_graph_seed,
+            allow_linear_fallback=allow_linear_fallback,
         )
 
         # ---- 任务配置 ----
@@ -272,6 +293,9 @@ class MotionPlanningModule:
         # ---- 步骤 d：组装结果 ----
         trajectory = plan_result["trajectory"]
         duration = plan_result["duration"]
+        used_fallback = bool(plan_result.get("used_fallback", False))
+        phase = "move_linear_fallback" if used_fallback else "move"
+        error_message = plan_result["error_message"] if used_fallback else ""
 
         # 更新内部关节状态缓存
         self._current_joints[arm] = target_joints
@@ -285,8 +309,9 @@ class MotionPlanningModule:
             n_waypoints=len(trajectory),
             target_joints=target_joints,
             gripper_command=1.0,  # 默认张开
-            phase="move",
-            error_message="",
+            phase=phase,
+            error_message=error_message,
+            used_fallback=used_fallback,
         )
 
     # ================================================================
@@ -353,6 +378,8 @@ class MotionPlanningModule:
         current_joints = self._current_joints[arm]
         passive_joints = self._current_joints["right" if arm == "left" else "left"]
         waypoint_details = []
+        used_fallback = False
+        fallback_messages = []
 
         while wm.has_next():
             wp = wm.get_next_waypoint()
@@ -389,11 +416,16 @@ class MotionPlanningModule:
             segment_traj = plan_result["trajectory"]
             all_trajectory.extend(segment_traj)
             current_joints = ik_result["joint_angles"]
+            segment_used_fallback = bool(plan_result.get("used_fallback", False))
+            used_fallback = used_fallback or segment_used_fallback
+            if segment_used_fallback:
+                fallback_messages.append(f"{wp.description}: {plan_result['error_message']}")
 
             waypoint_details.append({
                 "phase": wp.description,
                 "n_waypoints": len(segment_traj),
                 "gripper": wp.gripper_state,
+                "used_fallback": segment_used_fallback,
             })
 
         # ---- 更新内部状态 ----
@@ -411,8 +443,9 @@ class MotionPlanningModule:
             n_waypoints=len(all_trajectory),
             target_joints=current_joints,
             gripper_command=0.0,  # 序列结束时夹爪闭合
-            phase="grasp_sequence",
-            error_message="",
+            phase="grasp_sequence_linear_fallback" if used_fallback else "grasp_sequence",
+            error_message="；".join(fallback_messages),
+            used_fallback=used_fallback,
         )
 
     # ================================================================

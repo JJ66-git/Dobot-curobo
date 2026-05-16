@@ -31,6 +31,7 @@ MOTION_POSITION_TOLERANCE_M = 0.002
 MOTION_ORIENTATION_TOLERANCE_RAD = 0.10
 PLANNER_MAX_ATTEMPTS = 8
 DISABLE_GRAPH_ATTEMPT = 10_000
+LINEAR_FALLBACK_MAX_STEP_RAD = 0.04
 DEFAULT_LEFT_PARK_JOINTS = np.array(
     [-0.35, 0.85, -0.30, 0.10, 0.0, 0.0], dtype=np.float32
 )
@@ -161,7 +162,8 @@ class DualArmMotionPlanner:
                  scene_model: Optional[str] = None,
                  device: str = None,
                  self_collision_check: bool = True,
-                 use_graph_seed: bool = False):
+                 use_graph_seed: bool = False,
+                 allow_linear_fallback: bool = False):
         """
         初始化运动规划器。
 
@@ -174,6 +176,7 @@ class DualArmMotionPlanner:
         self._robot_config_input = robot_config
         self._self_collision_check = self_collision_check
         self._use_graph_seed = use_graph_seed
+        self._allow_linear_fallback = allow_linear_fallback
         self._fallback_ik_solver = None
         robot_config = build_curobo_robot_config(robot_config)
         planner_kwargs = {
@@ -218,6 +221,7 @@ class DualArmMotionPlanner:
         print(f"  插值 dt: {self._interp_dt:.4f}s")
         print(f"  自碰撞检测: {self_collision_check}")
         print(f"  图搜索种子: {use_graph_seed}")
+        print(f"  线性兜底轨迹: {allow_linear_fallback}")
         print(
             f"  收敛阈值: pos≤{MOTION_POSITION_TOLERANCE_M*1000:.1f}mm, "
             f"rot≤{MOTION_ORIENTATION_TOLERANCE_RAD:.3f}rad"
@@ -384,6 +388,20 @@ class DualArmMotionPlanner:
         else:
             debug_info = getattr(result, "debug_info", "") if result is not None else ""
             detail = f"；调试信息: {debug_info}" if debug_info else ""
+            if self._allow_linear_fallback:
+                traj_arm = self._make_linear_fallback_trajectory(start_joints, goal_joints)
+                n_wp = len(traj_arm)
+                return {
+                    "success": True,
+                    "trajectory": traj_arm,
+                    "duration": round(n_wp * self._interp_dt, 4),
+                    "n_waypoints": n_wp,
+                    "error_message": (
+                        "使用开发/仿真线性兜底轨迹：cuRobo 关节空间规划失败"
+                        f"{detail}。该轨迹不保证避障，只用于 Isaac Lab 联调或可视化排查。"
+                    ),
+                    "used_fallback": True,
+                }
             return {
                 "success": False,
                 "trajectory": None,
@@ -644,6 +662,31 @@ class DualArmMotionPlanner:
             current_state=current_state,
             **self._planning_retry_kwargs(self._planner.plan_cspace),
         )
+
+    def _make_linear_fallback_trajectory(
+        self,
+        start_joints: Sequence[float],
+        goal_joints: Sequence[float],
+        max_step_rad: float = LINEAR_FALLBACK_MAX_STEP_RAD,
+    ) -> List[List[float]]:
+        """
+        Generate a simple joint-space interpolation for development fallback.
+
+        This intentionally does not replace cuRobo collision checking. It is a
+        clearly opt-in path for Isaac Lab visualization and integration tests
+        when collision-sphere configuration is still being tuned.
+        """
+        start = np.asarray(start_joints, dtype=np.float32)
+        goal = np.asarray(goal_joints, dtype=np.float32)
+        if start.shape != (6,) or goal.shape != (6,):
+            raise ValueError(
+                f"linear fallback needs 6-DOF start/goal, got {start.shape} and {goal.shape}"
+            )
+        max_delta = float(np.max(np.abs(goal - start)))
+        steps = max(2, int(np.ceil(max_delta / max_step_rad)) + 1)
+        alpha = np.linspace(0.0, 1.0, steps, dtype=np.float32)[:, None]
+        traj = start[None, :] + alpha * (goal - start)[None, :]
+        return traj.astype(np.float32).tolist()
 
     def _make_joint_state(
         self, joints: list, arm: str = "left", passive_joints: Optional[list] = None

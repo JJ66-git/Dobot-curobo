@@ -515,8 +515,24 @@ def test_motion_planner():
     _ok("单臂 12 关节状态补全 PASS")
     passed += 1
 
+    # ---- 3.3 开发/仿真兜底轨迹检查 ----
+    _sub("3.3 开发/仿真线性兜底轨迹检查")
+    total += 1
+    fallback_traj = planner._make_linear_fallback_trajectory(
+        LEFT_TEST_JOINT_CANDIDATES[0],
+        LEFT_TEST_JOINT_CANDIDATES[1],
+    )
+    _info(f"兜底轨迹点: {len(fallback_traj)}")
+    _info(f"首点: {[f'{a:.3f}' for a in fallback_traj[0]]}")
+    _info(f"末点: {[f'{a:.3f}' for a in fallback_traj[-1]]}")
+    assert len(fallback_traj) >= 2, "兜底轨迹至少应包含起点和终点"
+    assert np.allclose(fallback_traj[0], LEFT_TEST_JOINT_CANDIDATES[0]), "兜底轨迹首点不是起点"
+    assert np.allclose(fallback_traj[-1], LEFT_TEST_JOINT_CANDIDATES[1]), "兜底轨迹末点不是目标"
+    _ok("开发/仿真线性兜底轨迹 PASS")
+    passed += 1
+
     # ---- 3.3 左臂 plan_to_pose ----
-    _sub("3.3 左臂 plan_to_pose")
+    _sub("3.4 左臂 plan_to_pose")
     total += 1
     t0 = time.time()
     left_target, result_l = _first_working_plan_target(
@@ -533,7 +549,7 @@ def test_motion_planner():
     passed += 1
 
     # ---- 3.4 右臂 plan_to_pose ----
-    _sub("3.4 右臂 plan_to_pose")
+    _sub("3.5 右臂 plan_to_pose")
     total += 1
     right_target, result_r = _first_working_plan_target(
         planner, "right", RIGHT_TEST_JOINT_CANDIDATES
@@ -543,7 +559,7 @@ def test_motion_planner():
     passed += 1
 
     # ---- 3.5 轨迹平滑性检查 ----
-    _sub("3.5 轨迹平滑性检查")
+    _sub("3.6 轨迹平滑性检查")
     total += 1
     traj = np.array(result_l["trajectory"])  # (N, 6)
     # 计算相邻点的最大关节角变化
@@ -559,7 +575,7 @@ def test_motion_planner():
     passed += 1
 
     # ---- 3.6 关节限位合规 ----
-    _sub("3.6 关节限位合规")
+    _sub("3.7 关节限位合规")
     total += 1
     within_limits = np.all(traj >= -np.pi) and np.all(traj <= np.pi)
     _info(f"全部在 [-π, π] 内: {within_limits}")
@@ -568,7 +584,7 @@ def test_motion_planner():
     passed += 1
 
     # ---- 3.7 关节空间规划 ----
-    _sub("3.7 plan_joint_to_joint 关节空间规划")
+    _sub("3.8 plan_joint_to_joint 关节空间规划")
     total += 1
     _, _, result_j = _first_working_joint_plan_target(
         planner,
@@ -585,7 +601,7 @@ def test_motion_planner():
     passed += 1
 
     # ---- 3.8 plan_grasp 三阶段 ----
-    _sub("3.8 plan_grasp 三阶段抓取规划")
+    _sub("3.9 plan_grasp 三阶段抓取规划")
     total += 1
     result_g = _first_working_grasp_start(
         planner,
@@ -818,8 +834,10 @@ def test_full_pipeline():
     assert restored["success"] == result.success, "JSON 反序列化 success 不一致"
     assert restored["arm"] == result.arm, "JSON 反序列化 arm 不一致"
     assert len(restored["trajectory"]) == result.n_waypoints, "JSON 反序列化轨迹点数不一致"
+    assert restored["used_fallback"] == result.used_fallback, "JSON 反序列化 used_fallback 不一致"
     _info(f"JSON 长度: {len(json_str)} 字符")
     _info(f"轨迹点数: {len(restored['trajectory'])}")
+    _info(f"使用兜底轨迹: {restored['used_fallback']}")
     _ok("JSON 序列化 PASS")
     passed += 1
 
