@@ -282,8 +282,8 @@ class DualArmMotionPlanner:
         # 构造起始关节状态
         q_start = self._make_joint_state(current_joints, arm, passive_joints)
 
-        # 构造目标位姿。GoalToolPose.from_poses() 需要 4D 张量：
-        # [batch_size, num_goalsets, num_poses, coord]，典型值 [1, 1, 1, 3/4]
+        # 构造目标位姿。GoalToolPose.from_poses() 会把每个 link 的 Pose
+        # 统一组装成 [batch, horizon, num_links, num_goalset, coord]。
         goal = self._make_goal_pose(target_frame, target_pose)
 
         # ---- 调用 cuRobo 规划 ----
@@ -435,7 +435,7 @@ class DualArmMotionPlanner:
         # 构造起始状态
         q_start = self._make_joint_state(current_joints, arm)
 
-        # 构造抓取位姿（GoalToolPose 需要 4D 张量）
+        # 构造抓取位姿（GoalToolPose 最终为 5D 目标张量）
         grasp_goal = self._make_goal_pose(target_frame, grasp_pose)
 
         # ---- 调用 cuRobo 三阶段抓取规划 ----
@@ -702,9 +702,11 @@ class DualArmMotionPlanner:
         target_frame = self._get_target_frame(arm)
         kin = self._planner.compute_kinematics(joint_state)
         tool_pose = kin.tool_poses.get_link_pose(target_frame)
+        pos = tool_pose.position.squeeze().detach().cpu().numpy()
+        quat = tool_pose.quaternion.squeeze().detach().cpu().numpy()
         return {
-            "position": tool_pose.position.squeeze().detach().cpu().numpy().tolist(),
-            "quaternion": tool_pose.quaternion.squeeze().detach().cpu().numpy().tolist(),
+            "position": pos.ravel().tolist(),
+            "quaternion": quat.ravel().tolist(),
         }
 
     def _make_goal_pose(self, target_frame: str, target_pose: Dict) -> GoalToolPose:
@@ -716,9 +718,9 @@ class DualArmMotionPlanner:
             target_pose: {"position": [x,y,z], "quaternion": [qw,qx,qy,qz]}
 
         返回:
-            GoalToolPose，包含 4D 张量:
-            - position.shape: [batch, goalsets, poses, 3]
-            - quaternion.shape: [batch, goalsets, poses, 4]
+            GoalToolPose，包含 5D 张量:
+            - position.shape: [batch, horizon, num_links, num_goalset, 3]
+            - quaternion.shape: [batch, horizon, num_links, num_goalset, 4]
         """
         # ---- 输入验证 ----
         if "position" not in target_pose or "quaternion" not in target_pose:
@@ -746,18 +748,20 @@ class DualArmMotionPlanner:
         if not np.isclose(quat_norm, 1.0, atol=0.1):
             raise ValueError(f"quaternion 应该归一化（模≈1），当前模: {quat_norm:.3f}")
 
-        # ---- 构造 4D 张量 [batch, goalsets, poses, coord] ----
+        # ---- 构造目标 Pose 张量 ----
+        # 注意：必须用 .tolist() 转换 numpy 为 Python list，
+        # 否则 torch.tensor 会把 numpy 数组当成额外维度展开
         pos_tensor = torch.tensor(
-            [[[[pos_array]]]], dtype=torch.float32, device=self._device
+            [[[[pos_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         quat_tensor = torch.tensor(
-            [[[[quat_array]]]], dtype=torch.float32, device=self._device
+            [[[[quat_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         goal_dict = self._make_single_arm_goal_dict(target_frame, pos_tensor, quat_tensor)
         goal = GoalToolPose.from_poses(
             goal_dict, ordered_tool_frames=self._tool_frames, num_goalset=1
         )
-        if goal.position.ndim != 4 or goal.quaternion.ndim != 4:
+        if goal.position.ndim != 5 or goal.quaternion.ndim != 5:
             raise ValueError(
                 "GoalToolPose shape error: "
                 f"position={tuple(goal.position.shape)}, "

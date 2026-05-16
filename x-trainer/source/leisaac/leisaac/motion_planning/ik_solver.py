@@ -183,19 +183,24 @@ class DualArmIKSolver:
         self._validate_pose(left_pose, "左臂")
         self._validate_pose(right_pose, "右臂")
 
+        left_pos_array = np.asarray(left_pose["position"], dtype=np.float32)
+        left_quat_array = np.asarray(left_pose["quaternion"], dtype=np.float32)
+        right_pos_array = np.asarray(right_pose["position"], dtype=np.float32)
+        right_quat_array = np.asarray(right_pose["quaternion"], dtype=np.float32)
+
         # ---- 构造 cuRobo Pose 张量 ----
-        # shape = [batch, goalsets, poses, coord] = [1, 1, 1, 3/4]
+        # 先转成 Python list，避免 torch.tensor 嵌套 numpy 数组时多展开一层维度。
         left_pos = torch.tensor(
-            [[[[left_pose["position"]]]]], dtype=torch.float32, device=self._device
+            [[[[left_pos_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         left_quat = torch.tensor(
-            [[[[left_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
+            [[[[left_quat_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         right_pos = torch.tensor(
-            [[[[right_pose["position"]]]]], dtype=torch.float32, device=self._device
+            [[[[right_pos_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         right_quat = torch.tensor(
-            [[[[right_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
+            [[[[right_quat_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----
@@ -341,12 +346,12 @@ class DualArmIKSolver:
         kin = self._ik.compute_kinematics(joint_state)
         tool_pose = kin.tool_poses.get_link_pose(target_frame)
 
-        pos = tool_pose.position.squeeze().cpu().numpy().tolist()
-        quat = tool_pose.quaternion.squeeze().cpu().numpy().tolist()
+        pos = tool_pose.position.squeeze().detach().cpu().numpy()
+        quat = tool_pose.quaternion.squeeze().detach().cpu().numpy()
 
         return {
-            "position": pos,
-            "quaternion": quat,
+            "position": pos.ravel().tolist(),
+            "quaternion": quat.ravel().tolist(),
         }
 
     def _compute_home_tool_poses(self) -> Dict[str, Pose]:
@@ -469,12 +474,16 @@ class DualArmIKSolver:
         # ---- 参数校验 ----
         self._validate_pose(target_pose, arm_label)
 
-        # ---- 构造 cuRobo Pose 张量 [batch, goalsets, poses, coord] ----
+        pos_array = np.asarray(target_pose["position"], dtype=np.float32)
+        quat_array = np.asarray(target_pose["quaternion"], dtype=np.float32)
+
+        # ---- 构造 cuRobo Pose 张量 ----
+        # 先转成 Python list，避免 torch.tensor 嵌套 numpy 数组时多展开一层维度。
         pos_tensor = torch.tensor(
-            [[[[target_pose["position"]]]]], dtype=torch.float32, device=self._device
+            [[[[pos_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
         quat_tensor = torch.tensor(
-            [[[[target_pose["quaternion"]]]]], dtype=torch.float32, device=self._device
+            [[[[quat_array.tolist()]]]], dtype=torch.float32, device=self._device
         )
 
         # ---- 构造 GoalToolPose ----
